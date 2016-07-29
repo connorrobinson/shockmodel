@@ -1,0 +1,91 @@
+#!/bin/csh
+
+# <-- lines which start with this are comments
+
+#-----------------------------------------------------------------
+#Input data (you fill in):
+#give a name to your run (for labels in output files):
+set NAME='test'
+
+#DISTANCE    in pc
+set DISTANCE='140.0'
+#MASS	     Stellar mass in solar units
+#RADIO	     Stellar radius in solar units
+set MASS='0.8'
+set RADIO='2.1'
+ 
+#BIGF        Energy flux
+set BIGF='1E+12'
+#FILLING     filling factor
+set FILLING='0.01'
+
+#You need to create a file: fort.70 with a line containing:
+#Teff  L/Lsol  R/Rsol  M/Msol  gravity  M/R(in solar units)  Av
+#where R=RADIO, M=MASS
+
+#You need to have a file fort.72 containing photospheric
+#fluxes. See description below
+
+#=============================================================================
+#
+#OBTAIN SHOCK AND PRE-SHOCK FLUXES FOR INPUT TO COLUMNA: interpolaenf
+#Interpolates in Gullbring's shock models for given M/R
+set interpolaenf=../PROGRAMS/interpolaenf
+
+##Input data for interpolaenf
+#BIGF        Energy flux, fill above
+#MASS	     Stellar mass in solar units
+#Radio	     Stellar radius in solar units
+
+
+##Output from interpolaf
+#fort.40 with shock and pre-shock spectra
+#input to COLUMNA
+ 
+##interpolates in F for given M/R
+$interpolaenf << EOD
+$BIGF
+$MASS
+$RADIO
+EOD
+#rename fort.40:
+##\mv fort.40 40.$BIGF.$NAME
+
+
+
+#----------------------------------------------------------------------------
+#HEATED PHOTOSPHERE CALCULATION: COLUMNA
+set COLUMNA=../PROGRAMS/columna_14_test
+
+##Input data for COLUMNA:
+#NLTE=0       =1 calculate NLTE H populations, not yet implemented, leave at 0
+#FILLING     filling factor, fill above
+#BIGF        Energy flux, fill above
+#DISTANCE    in pc
+#fort.40     file with shock spectra, output from interpolaenf
+#fort.72     file with photospheric fluxes - I will send you one appropriate for a K7 star
+#            Scale fluxes to your photometry (WARNING: fluxes in Flambda erg/cm3/s)
+
+set NLTE='0'
+
+
+##Output from COLUMNA:
+#fort.30
+#with heated photosphere structure and
+# output spectra of:
+#heated photosphere,pre-shock, photosphere
+
+echo entering shock calculation
+##shock spectrum calculation
+$COLUMNA << EOD
+$NLTE $FILLING 1.5
+$BIGF
+$DISTANCE
+fort.40
+hbc427_longspect.dat
+EOD
+#rename fort.30:
+\cp fort.30 30.$BIGF.$NAME
+ 
+ 
+exit
