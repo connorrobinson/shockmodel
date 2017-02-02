@@ -33,7 +33,7 @@ mask = [[4839,4895],\
         [2769,2845],\
         [2893,3000],\
         [3095,3160],\
-        ]
+        [   1,1700]]
     
 #Set up paths
 cttspath = '/Users/Connor/Desktop/Research/shock/data/ctts/'
