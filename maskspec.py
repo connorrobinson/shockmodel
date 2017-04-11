@@ -20,7 +20,8 @@ datatag = 'HSTv2'
 
 #Define the mask manually by looking at plot. Very similar to Ingleby 2015 excluded regions.
 
-mask = [[4839,4895],\
+mask = [[6525,6600],\
+        [4839,4895],\
         [4309,4383],\
         [4070,4120],\
         [3960,3981],\
