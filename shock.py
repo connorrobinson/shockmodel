@@ -19,7 +19,7 @@ Package that contains most of the code required to work with the Calvet 1998 sho
 
 FUNCTIONS:
     
-    scale: (done)
+    scale: (Reworked, 4/11/17)
         Scale WTTS spectra based on veiling + distance + radius of the star
     
     create: (done)
@@ -36,12 +36,12 @@ NOTE: Requires EDGE. You can get the latest version at https://github.com/danfel
     
 '''
 
-def scale(targ, wtarg, datatag, veiling, Rctts, Rwtts, d_wtts, d_ctts,photometry = 0,\
+def scale(targ, wtarg, datatag, veiling, Rctts, dctts,photometry = 0,\
      wttspath = '/Users/Connor/Desktop/Research/shock/data/wtts/',\
      cttspath = '/Users/Connor/Desktop/Research/shock/data/ctts/',\
      plotpath = '/Users/Connor/Desktop/Research/shock/plotting/scaled/',\
      outpath  = '/Users/Connor/Desktop/Research/shock/data/wtts/scaled/',\
-     wttstag = 'HST', clob = 0):
+     wttstag = 'HST', clob = 0, verbose = 1):
     '''
      shock.scale
      
@@ -53,16 +53,16 @@ def scale(targ, wtarg, datatag, veiling, Rctts, Rwtts, d_wtts, d_ctts,photometry
          wtarg: [str] WTTS you are trying to scale.
          datatag: [str] Tag for the CTTS spectra you are comparing against.
          veiling: [float] Veiling at V band. 
-         Rwtts: [float] Radius of the wtts in solar units
-         d_wtts: [float] Distance to the wtts in pc
-         d_ctts: [float Distance to the ctts in pc 
+         dctts: [float] Distance to the ctts in pc 
      
      OPTIONAL INPUTS:
          photometry: [boolean] If True, will include photometry in the output file. Only want this for plotting purposes
-         wttspath: path to wtts data
-         cttspath: path to ctts data
-         plotpath: path for plots to end up at
-         outpath: path for the scaled spectrum to go
+         wttspath: [str] path to wtts data
+         cttspath: [str] path to ctts data
+         plotpath: [str] path for plots to end up at
+         outpath: [str] path for the scaled spectrum to go
+         clob:[boolean] if true, will overwrite previous file
+         verbose: [boolean] if true, code will yell things at you
     
     '''
     #Define some constants
@@ -74,94 +74,86 @@ def scale(targ, wtarg, datatag, veiling, Rctts, Rwtts, d_wtts, d_ctts,photometry
     ctts = edge.loadPickle(targ,  picklepath = cttspath)
     
     #Find the v band magnitude for the CTTS
-    V_wl = 0.545 #V band wavelength in microns
-    V_ind =  np.argmin(abs(ctts.photometry['Vizier']['wl']-V_wl))
-    Vflux = ctts.photometry['Vizier']['lFl'][V_ind]
+    Vwl = 0.554 #V band wavelength in microns
+    maxdiff = .005
     
-    wV_ind =  np.argmin(abs(wtts.photometry['Vizier']['wl']-V_wl))
-    wVflux = wtts.photometry['Vizier']['lFl'][wV_ind]
+    #Flatten all the photometry into a single array
+    phot = np.array([])
+    photwl = np.array([])
+    for x in ctts.photometry.keys():
+        phot = np.hstack([phot, ctts.photometry[x]['lFl']])
+        photwl = np.hstack([photwl, ctts.photometry[x]['wl']])
     
-    #Calculate the flux to scale the spectra
-    normflux     = (Vflux/wVflux) / (1 + veiling)
-    plotfactor = normflux
+    #Get the V band points within maxdiff of the central wl
+    closest = np.abs(photwl - Vwl) < maxdiff
+    Vfluxes = phot[closest]
+    # Now check if there are valid photometry
+    if np.sum(closest) == 0:
+        raise ValueError('shock.scale ERROR: NO VALID CTTS JOHNSON V BAND PHOTOMETRY. WAVELENGTH MUST BE WITHIN 10nm OF 0.554')
+    #if there are, scale to the mean value of the photometry
+    elif np.sum(closest) == 1:
+        Vflux = Vfluxes[0]
+    else:
+        print('MULTIPLE VALUES OF V BAND PHOTOMETRY FOUND FOR CTTS: TAKING MEDIAN VALUE!')
+        Vflux = np.median(Vfluxes)
     
-    #Scale the spectra and the photometry 
-    scaled_spectra = wtts.spectra[wttstag]['lFl'] * plotfactor
-    scaled_photometry = wtts.photometry['Vizier']['lFl'] * plotfactor
+    #Repeat for wtts
+    wphot = np.array([])
+    wphotwl = np.array([])
+    for x in wtts.photometry.keys():
+        wphot = np.hstack([wphot, wtts.photometry[x]['lFl']])
+        wphotwl = np.hstack([wphotwl, wtts.photometry[x]['wl']])
     
-    #Plot everything up
-    #THIS NEED TO BE WRITTEN IN A BETTER WAY!!!!!
-    if datatag != 0:
-        plt.plot(ctts.spectra[datatag]['wl'][np.argsort(ctts.spectra[datatag]['wl'])],ctts.spectra[datatag]['lFl'][np.argsort(ctts.spectra[datatag]['wl'])], color = 'r', label = datatag)
-    plt.plot(ctts.photometry['Vizier']['wl'], ctts.photometry['Vizier']['lFl'], 'ro', markersize = 7)
-    
-    plt.plot(wtts.spectra[wttstag]['wl'][np.argsort(wtts.spectra[wttstag]['wl'])], scaled_spectra[np.argsort(wtts.spectra[wttstag]['wl'])], color = 'b', label = 'WTTS')
-    plt.plot(wtts.photometry['Vizier']['wl'], scaled_photometry, 'bo', markersize=7)
-    
-    plt.xlabel(r'Wavelength $\rm [\mu m]$')
-    plt.ylabel(r'$\rm \lambda F_{\lambda}\,[erg\cdot s^{-1} \cdot cm^{-2}]$')
-    
-    plt.xlim([1e-1, 1e1])
-    plt.ylim([1e-14, 1e-8])
-    plt.legend(loc = 'best')
-    plt.yscale('log')
-    plt.xscale('log')
-    
-    plt.savefig(plotpath+targ+'_scaled.pdf')
-    plt.show()
+    wclosest = np.abs(wphotwl - Vwl) < maxdiff
+    wVfluxes = wphot[wclosest]
+    # Now check if there  valid photometry
+    if np.sum(closest) == 0:
+        raise ValueError('shock.scale ERROR: NO VALID WTTS JOHNSON V BAND PHOTOMETRY. WAVELENGTH MUST BE WITHIN 10nm OF 0.554')
+    #if there are, scale to the mean value of the photometry
+    elif  np.sum(closest) == 1:
+        wVflux = wVfluxes[0]
+    else:
+        print('MULTIPLE VALUES OF V BAND PHOTOMETRY FOUND FOR WTTS: TAKING MEDIAN VALUE!')
+        wVflux = np.median(wVfluxes)
     
     #Now scale the spectra to the surface of the star
-    
     #The code takes in the flux in units of erg s^(-1) cm^(-2) Ang ^(-1) (at the star)
     #Need to scale the observed flux of the WTTS to the surface of the CTTS
+    factor = (Vflux/wVflux) * ((dctts * pc)/(Rctts * Rsun))**2 * (1/(1+veiling))
     
-    factor = (Vflux/wVflux) * ((d_ctts * pc)/(Rctts * Rsun))**2 * (1/(1+veiling))
-    
-    flux = (wtts.spectra[wttstag]['lFl'] / (wtts.spectra[wttstag]['wl']*1e4)) *  factor
-    photometryflux = (wtts.photometry['Vizier']['lFl'] / (wtts.photometry['Vizier']['wl']*1e4)) * factor
+    #Scale the spectra/photometry + put in the right units
+    photflux = (wphot/(wphotwl*1e4))*factor
+    spectra = (wtts.spectra[wttstag]['lFl'] / (wtts.spectra[wttstag]['wl']*1e4)) *  factor
     
     #Write everything to a file
     outfile = open(outpath+targ+'_'+wtarg+'veil'+str(veiling)+'.dat', 'w')
-    
-    for i, item in enumerate(scaled_spectra):
-        outfile.write('       ' + str(1e4*wtts.spectra[wttstag]['wl'][i]).ljust(9,'0') +      '       '+str(flux[i]).zfill(8)+'\n')
-    
+    for i, item in enumerate(spectra):
+        outfile.write('       ' + str(1e4*wtts.spectra[wttstag]['wl'][i]).ljust(9,'0') +      '       '+str(spectra[i]).zfill(8)+'\n')
     #if the photometry flag is turned on, include the photometry in the outputted file. Should only be used for plotting purposes
     if photometry == True:
-        for i, item in enumerate(photometryflux):
-            outfile.write('       ' + str(1e4*wtts.photometry['Vizier']['wl'][i]).ljust(9,'0') +'       '+str(photometryflux[i]).zfill(8)+'\n') 
-        
+        for i, item in enumerate(photflux):
+            outfile.write('       ' + str(1e4*wphotwl[i]).ljust(9,'0') +'       '+str(photometryflux[i]).zfill(8)+'\n') 
     outfile.close()
     
     #Make another pickle with the scaled spectra
     wtts_scaled = edge.TTS_Obs(targ+'_'+wtarg+'veil'+str(veiling))
-    
-    wtts_scaled.add_spectra(wttstag, wtts.spectra[wttstag]['wl'], flux)
-    wtts_scaled.add_photometry('Vizier', wtts.photometry['Vizier']['wl'], scaled_photometry)
+    wtts_scaled.add_spectra(wttstag, wtts.spectra[wttstag]['wl'], spectra)
+    wtts_scaled.add_photometry('scaled', wphotwl, photflux)
     
     #Write a new pickle file
     wtts_scaled.SPPickle(outpath, clob = clob)
     
-    #Plotting for debugging
-    # cttsfactor  = ((d_ctts * pc)/(Rctts * Rsun))**2
-    # #
-    # plt.plot(wtts_scaled.spectra[wttstag]['wl'], wtts_scaled.spectra[wttstag]['lFl'], color = 'b')
-    # plt.scatter(wtts_scaled.photometry['Vizier']['wl'], wtts_scaled.photometry['Vizier']['lFl'], color = 'b')
-    # #
-    # # plt.plot(ctts.spectra[datatag]['wl'], ctts.spectra[datatag]['lFl']/(ctts.spectra[datatag]['wl']*1e4) * cttsfactor, color = 'r')
-    # plt.scatter(ctts.photometry['Vizier']['wl'], ctts.photometry['Vizier']['lFl']/(ctts.photometry['Vizier']['wl']*1e4) * cttsfactor, color = 'r')
-    # #
-    # plt.xscale('log')
-    # plt.yscale('log')
-    # #
-    # plt.show()
-    #
-    # pdb.set_trace()
-
+    #Plot up everything to make sure.
+    plt.scatter(wphotwl, wphot * (Vflux/wVflux)*(1/(veiling+1)), color = 'b', zorder= 2 )
+    plt.scatter(photwl, phot, color = 'r')
+    plt.ylim([10**np.floor(np.log10(np.min(np.hstack([phot, wphot])))),  10**np.ceil(np.log10(np.max(np.hstack([phot, wphot]))))])
+    plt.xscale('log')
+    plt.yscale('log')
+    plt.show()
 
 def create(path,table,names,NAME, wttsfile, samplepath = '', nzeros=3, \
-DIRPROG = '/project/bu-disks/shared/shockmodels/PROGRAMS',\
-DIRDAT = '/project/bu-disks/shared/shockmodels/DATAFILES'):
+    DIRPROG = '/project/bu-disks/shared/shockmodels/PROGRAMS',\
+    DIRDAT = '/project/bu-disks/shared/shockmodels/DATAFILES'):
 
     '''
     shock.create
@@ -210,9 +202,6 @@ DIRDAT = '/project/bu-disks/shared/shockmodels/DATAFILES'):
                 
     
     #Replace the WTTS file
-    #start = text.find('$DISTANCE\nfort.40\n')+len('$DISTANCE\nfort.40\n')
-    #end = start + len(text[start:].split("\nEOD")[0])
-    
     start = text.find('set filewtts=')+len('set filewtts=')
     end = start +len(text[start:].split('\n')[0])
     text = text[:start] + wttsfile + text[end:]
@@ -239,38 +228,15 @@ DIRDAT = '/project/bu-disks/shared/shockmodels/DATAFILES'):
     newjob.writelines(outtext)
     newjob.close()
     
-    ## Write the fort.70 file
-    #-------------------------------
-    
-    #Set up necessary constants
-    #Tsun = 5780 #K
-    #Msun = 2e30 #kg
-    #G    = 6.67e-11 # N * m^2/kg^2
-    #Rsun = 6.96e8 #m
-    
-    #Calculate L/Lsun and M/R (in solar units)
-    #Lsol =  np.round(float(table['RADIO'])**2 * (float(table['Teff'])/Tsun)**4, decimals = 3)
-    
-    #Calculate the mass to radius ratio
-    #MR = np.round(float(table['MASS'])/float(table['RADIO']), decimals =3)
-    
-    #Calculate log(g) in cgs units
-    #gravity = np.round(np.log10((G * (float(table['MASS'])*Msun)/(float(table['RADIO'])*Rsun)**2) * 100), decimals = 3)
-    
-    #Write the new file
-    #newfort = open(path+'fort.70', 'w')
-    #newfort.writelines(table['Teff']+'   '+str(Lsol)+'    '+table['RADIO']+'    '+table['MASS']+'     '+str(gravity)+'    '+str(MR)+'    0')
-    #newfort.close()
-    
 
-def modelplot(F,jobnums, f_in, targ, plottarg, wtarg, datatag, dummy_f, modeltag,\
+def modelplot(F,jobnums, f, targ, wtarg, datatag,\
     wttspath = '/Users/Connor/Desktop/Research/shock/data/wtts/scaled/',\
     cttspath = '/Users/Connor/Desktop/Research/shock/data/ctts/',\
     modelpath ='/Users/Connor/Desktop/Research/shock/models/',\
     plotpath = '/Users/Connor/Desktop/Research/shock/plotting/modelplots/',\
     mask = False, maskfile = '/Users/Connor/Desktop/Research/shock/code/mask.dat',\
-    chi2 = -1, nzeros = 3, mdot = -1, xlim = [1e3, 2e4], ylim = [1e-14, 1e-8],\
-    photometry = True, spectrim = 0, smooth = 1, plottag = '', loc = 'best'):
+    plottarg = '', chi2 = -1, nzeros = 3, mdot = -1, xlim = [1e3, 2e4], ylim = [1e-14, 1e-8],\
+    photometry = True, spectrim = 0, smooth = 1, loc = 'best', errors = False):
     '''
     shock.modelplot
     
@@ -282,9 +248,8 @@ def modelplot(F,jobnums, f_in, targ, plottarg, wtarg, datatag, dummy_f, modeltag
     INPUTS:
         F: [list of strings] Energy flux. Should be an array in the form: ['1E+11','1E+12']
         jobnum: [list of ints] Job numbers associated with each F (in order)
-        f_in: [list of floats] Filling factor. Should be an array in the form: [0.02,  0.001]
+        f: [list of floats] Filling factor. Should be an array in the form: [0.02,  0.001]
         targ: [str] Name of the ctts (the one used in all the filenames ect)
-        plottarg: [str] Name of the ctts that will be used for plotting  (e.g. plottarg = 'GM Auriga' while targ = 'gmaur')
         wtarg: [str] Name of the ctts
         datatag: [str] Tag associated with the spectrum for the ctts, e.g. 'HSTv1'
     
@@ -295,26 +260,23 @@ def modelplot(F,jobnums, f_in, targ, plottarg, wtarg, datatag, dummy_f, modeltag
         plotpath: [String] path for created plot
         mask: [Boolean] If True, will overplot the mask in grey
         maskfile: [String] Path+name of the mask file, default is '/Users/Connor/Desktop/Research/shock/code/mask.dat'
+        plottarg: [str] Name of the ctts that will be used for plotting  (e.g. plottarg = 'GM Auriga' while targ = 'gmaur')
         chi2: [Float] If set to anything other than -1 will print chi**2 on the plot
         photometry: [Boolean] If True, photometry will be included on plot
         spectrim: [list of ints] Pairs of wavelengths to trim the observed between. E.g., [[2100, 2300], [4500,4600]]
-        smooth: [Int] Window for smoothing. Automatically set to 1 (no smoothing)
-        plottag: [String] Changes the plotting tag from datatag to something else.
+        smooth: [Int] Window for smoothing. Automatically set to 1 (no smoothing) (Uses the pandas rolling_mean function)
         loc: ['String'] Sets the location of your legend
         fontsize:[int]
         
         
     OUTPUTS:
-    
+        Shows + makes a plot of the model
     
     '''
-    #Scale f back from the dummy_f used to run the code. NOT SURE THIS IS WORKING CORRECTLY!!!!!
-    f = f_in
     
     #Fix the modelpath to include the target name if the default path is used
     if modelpath == '/Users/Connor/Desktop/Research/shock/models/':
         modelpath = modelpath+targ+'/'
-    
     
     if len(F[0]) == 1:
         modelname = ['fort40.'+targ+str(jobnums).zfill(nzeros)]
@@ -326,7 +288,7 @@ def modelplot(F,jobnums, f_in, targ, plottarg, wtarg, datatag, dummy_f, modeltag
     wtts = edge.loadPickle(targ+'_'+wtarg, picklepath = wttspath)
     
     #Sum up the components
-    wl, Fall, Fhp, Fpre, Fphot = modelsum(targ, modeltag, f, F, jobnums, nzeros = nzeros, modelpath = modelpath)
+    wl, Fall, Fhp, Fpre, Fphot = modelsum(targ, f, F, jobnums, nzeros = nzeros, modelpath = modelpath)
     
     #Plot the data
     if spectrim == 0:
@@ -335,22 +297,27 @@ def modelplot(F,jobnums, f_in, targ, plottarg, wtarg, datatag, dummy_f, modeltag
         trimmed = np.array([], dtype = int)
         for region in spectrim:
             trimmed = np.hstack([trimmed, np.intersect1d(np.where(ctts.spectra[datatag]['wl'][np.argsort(ctts.spectra[datatag]['wl'])] * 1e4 > region[0]), np.where(ctts.spectra[datatag]['wl'][np.argsort(ctts.spectra[datatag]['wl'])] * 1e4 < region[1]))])
-        
         spectrum_trimmed = ctts.spectra[datatag]['lFl'][np.argsort(ctts.spectra[datatag]['wl'])]
-#        trimmed_mask[trimmed] = False
         
         #Mask data outside the range of the model
         spectrum_trimmed[trimmed] = np.nan
-        
-        
         plt.plot(ctts.spectra[datatag]['wl'][np.argsort(ctts.spectra[datatag]['wl'])] * 1e4, pd.rolling_mean(spectrum_trimmed, smooth), color = 'g')
-        
-        
     
-    
+    #Add the photometry to the plot
     if photometry == True:
-        plt.scatter(ctts.photometry['Vizier']['wl']*1e4, ctts.photometry['Vizier']['lFl'], marker = 'o', s = 30, color = 'g')
+        phot = np.hstack([ctts.photometry[x]['lFl'] for x in ctts.photometry.keys()])
+        photwl = np.hstack([ctts.photometry[x]['wl'] for x in ctts.photometry.keys()])
+        plt.scatter(photwl*1e4, phot, marker = 'o', s = 30, color = 'g')
     
+    #Add Errors to the plot THIS CURRENTLY TAKES FOREVER TO PLOT!!!!
+    if errors == True:
+        plt.errorbar(ctts.spectra[datatag]['wl'][np.argsort(ctts.spectra[datatag]['wl'])] * 1e4, \
+        ctts.spectra[datatag]['lFl'][np.argsort(ctts.spectra[datatag]['wl'])], \
+        yerr = ctts.spectra[datatag]['err'][np.argsort(ctts.spectra[datatag]['wl'])], color = 'g', alpha = .5)
+        #plt.fill_between(ctts.spectra[datatag]['wl'][np.argsort(ctts.spectra[datatag]['wl'])] * 1e4, \
+        #(ctts.spectra[datatag]['err'] + ctts.spectra[datatag]['lFl'])[np.argsort(ctts.spectra[datatag]['wl'])], \
+        #(ctts.spectra[datatag]['err'] - ctts.spectra[datatag]['lFl'])[np.argsort(ctts.spectra[datatag]['wl'])], color = 'g', alpha = .1)
+        
     #Begin plotting the model
     #Defile colors to be used for the shock. If you want more than 5 components will need to add more colors
     colors = ['b', 'r', 'g', 'm', 'c', 'purple']
@@ -358,8 +325,8 @@ def modelplot(F,jobnums, f_in, targ, plottarg, wtarg, datatag, dummy_f, modeltag
     legendhandles = []
     
     if len(modelname) == 1:
-        plt.plot(wl[np.argsort(wl)], pd.rolling_mean(Fhp[np.argsort(wl)] * f,smooth), color = colors[0], alpha = .5, linestyle = '--', lw = 2)#, label = 'Heated Photosphere')
-        plt.plot(wl[np.argsort(wl)], pd.rolling_mean(Fpre[np.argsort(wl)] * f,smooth), color = colors[0], alpha = .5, linestyle = ':', lw = 2)#, label = 'Preshock Region')
+        plt.plot(wl[np.argsort(wl)], pd.rolling_mean(Fhp[np.argsort(wl)] * f,smooth), color = colors[0], alpha = .5, linestyle = '--', lw = 2)
+        plt.plot(wl[np.argsort(wl)], pd.rolling_mean(Fpre[np.argsort(wl)] * f,smooth), color = colors[0], alpha = .5, linestyle = ':', lw = 2)
         legendhandles.append(mpatches.Patch(color=colors[0], label=r'$F = $'+F+r', $f = $'+str(np.round(f,decimals = 4))))
     
         plt.plot(wl[np.argsort(wl)], pd.rolling_mean(Fall[np.argsort(wl)],smooth), color = 'k', label = 'Total Flux')
@@ -367,24 +334,21 @@ def modelplot(F,jobnums, f_in, targ, plottarg, wtarg, datatag, dummy_f, modeltag
     
     else:
         for i, model in enumerate(modelname):
-            plt.plot(wl[i][np.argsort(wl[i])], pd.rolling_mean(Fhp[i][np.argsort(wl[i])] * f[i],smooth), color = colors[i], alpha = .5, linestyle = '--', lw = 2)#, label = 'Heated Photosphere')
-            plt.plot(wl[i][np.argsort(wl[i])], pd.rolling_mean(Fpre[i][np.argsort(wl[i])] * f[i],smooth), color = colors[i], alpha = .5, linestyle = ':', lw = 2)#, label = 'Preshock Region')
+            plt.plot(wl[i][np.argsort(wl[i])], pd.rolling_mean(Fhp[i][np.argsort(wl[i])] * f[i],smooth), color = colors[i], alpha = .5, linestyle = '--', lw = 2)
+            plt.plot(wl[i][np.argsort(wl[i])], pd.rolling_mean(Fpre[i][np.argsort(wl[i])] * f[i],smooth), color = colors[i], alpha = .5, linestyle = ':', lw = 2)
             legendhandles.append(mpatches.Patch(color=colors[i], label=r'$F = $'+F[i]+r', $f = $'+str(np.round(f[i],decimals = 4))))
             
         plt.plot(wl[0][np.argsort(wl[0])], pd.rolling_mean(Fall[np.argsort(wl[0])],smooth), color = 'k', label = 'Total Flux')
         plt.plot(wl[0][np.argsort(wl[0])], pd.rolling_mean(Fphot[0][np.argsort(wl[0])] * (1-f[i]), smooth), color = 'k', alpha = .5, label = 'Photosphere')
     
-    
-    if plottag == '':
-        plottag = datatag
-        
+    if plottarg == '':
+        plottarg = datatag
     
     FhpArtist = plt.Line2D((0,1),(0,0), color='k', linestyle='--', label = 'Heated Photosphere', lw = 2)
     FpreArtist = plt.Line2D((0,1),(0,0), color='k', linestyle=':', label = 'Preshock Region', lw = 2)
     FallArtist = plt.Line2D((0,1),(0,0), color='k', label = 'Total Flux')
     PhotArtist = plt.Line2D((0,1),(0,0), color='k', label = 'Photosphere', alpha = .5)
-    DataArtist = plt.Line2D((0,1),(0,0), color='g', label = plottag)
-    
+    DataArtist = plt.Line2D((0,1),(0,0), color='g', label = plottarg)
     
     #Overplot the mask if the flag is on
     if mask == True:
@@ -408,30 +372,29 @@ def modelplot(F,jobnums, f_in, targ, plottarg, wtarg, datatag, dummy_f, modeltag
         mdotArtist = plt.Line2D((0,1),(0,0), color='w', label = r'$\dot{M} = '+str(np.round(mdot/10**(np.floor(np.log10(mdot))), decimals = 2)) +r'\times 10^{'+str(int(np.floor(np.log10(mdot))))+r'}\,M_{sun}/yr$') 
         legendhandles.append(mdotArtist)
         
-        
     plt.xlabel(r'Wavelength $\rm[\AA]$')
     plt.ylabel(r'$\rm \lambda F_{\lambda}\,[erg \cdot s^{-1} \cdot cm^{-2}]$')  
     
     plt.yscale('log')
-    #plt.xscale('log')
-    
     
     plt.legend(loc = loc, handles = legendhandles, fontsize = 15)
     plt.ylim(ylim)
     plt.xlim(xlim)
-    plt.title(plottarg)# + r': $f = $'+str(f)+ ', $F =$ ' +modelname[3:3+len(str.split(modelname[3:], '.'+targ)[0])])
     
-
+    if plottarg == '':
+        plottarg = targ
+    
+    plt.title(plottarg)
     plt.savefig(plotpath+targ+'_'+datatag+'.pdf')
     
     plt.show()
     
     
     
-def chisqr(ctts, wtts, F, jobnums, targ, plottarg, datatag, f_dummy, modeltag,
+def chisqr(ctts, wtts, F, jobnums, targ, datatag, f = -1,
     maskfile = '/Users/Connor/Desktop/Research/shock/code/mask.dat',\
     modelpath ='/Users/Connor/Desktop/Research/shock/models/',\
-    phottag = 'Vizier', wttsphottag = 'Vizier', part_interp = True, MCMC = False, f_in = 0, Nruns = 2500, nzeros = 3):
+    part_interp = True, MCMC = False, Nruns = 2500, nzeros = 3):
     
     '''
     shock.chisqr
@@ -444,23 +407,22 @@ def chisqr(ctts, wtts, F, jobnums, targ, plottarg, datatag, f_dummy, modeltag,
         ctts: [observation object from EDGE] Contains data for the CTTS 
         wtts: [observation object from EDGE] Contains data for the WTTS
         F: [list of strings] Energy flux. Should be an array in the form: ['1E+11','1E+12']
-        f: [list of floats] Filling factor. Should be an array in the form: [0.02,  0.001]
         targ: [str] Name of the ctts (the one used in all the filenames ect)
-        plottarg: [str] Name of the ctts that will be used for plotting  (e.g. plottarg = 'GM Auriga' while targ = 'gmaur')
         datatag: [str] Tag associated with the spectrum for the ctts, e.g. 'HSTv1'
-        f_dummy: [float] Dummy value of f that was used to run the code so it doesn't crash
     
     OPTIONAL INPUTS:
+        f: [list of floats] Filling factor. Should be an array in the form: [0.02,  0.001]. Not necessary for the MCMC job
         maskfile: Location of the mask file
         modelpath: path to models
-        phottag: [str] Tag associated with the photometry for the ctts, default is 'Vizier'
-        wttsphottag: [str] Tag associated with the photometry for the wtts, default is 'Vizier'
+        part_interp: [boolean] If True, interpolate all the model components onto the grid instead of just the Fall. MUCH faster to do this for many values of f.
+                               Must be set to true for the MCMC code at the moment.
         
+    MCMC INPUTS
         MCMC: Flag to turn on MCMC section of code
         Nruns: Number of MCMC runs
         
     OUTPUTS:
-        
+        Returns either a chi2 value or a MCMC walkers, depending on if the MCMC package was run.
         
         
     AUTHOR:
@@ -468,17 +430,23 @@ def chisqr(ctts, wtts, F, jobnums, targ, plottarg, datatag, f_dummy, modeltag,
     
     '''
     
-    #Scale f back from the dummy_f used to run the code
-    f = f_in#/f_dummy
+    if f == -1:
+        f = np.zeros(len(F))
     
     #Get the number of photometry points to trim off the end of the model
-    nphot = len(wtts.photometry[wttsphottag]['lFl'])
+    #nphot = len(wtts.photometry[wttsphottag]['lFl'])
+    #wphot = np.array([])
+    #wphotwl = np.array([])
+    # for x in ctts.photometry.keys():
+    #     wphot = np.hstack([wphot, wtts.photometry[x]['lFl']])
+    #     wphotwl = np.hstack([wphotwl, wtts.photometry[x]['wl']])
+    #
+    # nphot = len(wphot)
     
     if part_interp == False:
-        wlmodel, Fall_model, Fhp_model, Fpre_model, Fphot_model = modelsum(targ, modeltag, f, F, jobnums, nphot = nphot, nzeros = nzeros, modelpath = modelpath)
+        wlmodel, Fall_model, Fhp_model, Fpre_model, Fphot_model = modelsum(targ, f, F, jobnums, nzeros = nzeros, modelpath = modelpath)
     else:
-        wlmodel, Fhp_model, Fpre_model, Fphot_model = modelsum(targ, modeltag, f, F, jobnums, nphot = nphot, calc = False, nzeros = nzeros, modelpath = modelpath)
-        
+        wlmodel, Fhp_model, Fpre_model, Fphot_model = modelsum(targ, f, F, jobnums, calc = False, nzeros = nzeros, modelpath = modelpath)
         
     #Load in the mask
     maskraw = np.genfromtxt(maskfile, skip_header= 1)
@@ -567,7 +535,6 @@ def chisqr(ctts, wtts, F, jobnums, targ, plottarg, datatag, f_dummy, modeltag,
         
         #Calculate chi2 for each set of filling fraction, simple chi2 analysis here (for grid)
         if MCMC == False:
-            
             #Fix the single value of f cases
             if np.ndim(f) == 0 or np.ndim(f) == 1:
                 f = np.array([f])
@@ -618,8 +585,7 @@ def chisqr(ctts, wtts, F, jobnums, targ, plottarg, datatag, f_dummy, modeltag,
     
         return r_chi2
     
-def modelsum(targ, modeltag, f, F,jobnums,\
-    nphot = 0, \
+def modelsum(targ, f, F,jobnums,\
     modelpath = '/Users/Connor/Desktop/Research/shock/models/',\
     calc = True, nzeros = 3):
     '''
@@ -630,12 +596,10 @@ def modelsum(targ, modeltag, f, F,jobnums,\
     
     INPUTS:
         targ: [string] Name of the target
-        modeltag: [string] tag associated with the models, likely the same as targ
         f: Filling factor
         F: Accretion energy flux in ergs/s/cm^2
         
     OPTIONAL INPUTS:
-        nphot: [int] Number of photometry points to trim off the end of the model file
         modelpath: [string] Path to the models. If the default is used, add targ onto the end of the path.
         
     OUTPUTS:
@@ -653,24 +617,18 @@ def modelsum(targ, modeltag, f, F,jobnums,\
     #Fix the modelpath to include the target name if the default path is used
     if modelpath == '/Users/Connor/Desktop/Research/shock/models/':
         modelpath = modelpath+targ+'/'
-        
     
     if len(F) == 1:
         modelname = ['fort30.'+targ+str(jobnums).zfill(nzeros)]
     else:
         modelname = ['fort30.'+targ+str(job).zfill(nzeros) for job in jobnums]
     
-#    if len(F[0]) == 1:
-#        modelname = ['30.'+F+'.'+modeltag]
-#    else:
-#        modelname = ['30.'+x+'.'+modeltag for x in F]
-    
     #Load in the model
     #NOTE: THIS MAY NEED TO CHANGE, NOT SURE IF THE DATA ALWAYS STARTS HERE
     datastart = 119
     #datastart = 0
-    footer = 8 + nphot
-
+    footer = 8
+    
     wl    = []
     Fhp   = []
     Fpre  = []
@@ -705,7 +663,6 @@ def modelsum(targ, modeltag, f, F,jobnums,\
     Fpre  = np.array(Fpre)
     Fphot = np.array(Fphot)
     
-    
     if calc == True:
         F_nophot = np.array(F_nophot)
         if len(modelname) != 1:
@@ -737,40 +694,4 @@ def lnprior(f):
     if len(f[f<0]) != 0 or len(f[f>1]) !=0:
         return -np.inf
     return 0.0
-    
-    
-    #if -5.0 < m < 0.5 and 0.0 < b < 10.0 and -10.0 < lnf < 1.0:
-    #    return 0.0
-    #return -np.inf
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
