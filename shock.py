@@ -231,9 +231,12 @@ def create(path, table, names, NAME, wttsfile, samplepath = '', nzeros=3, \
     #Transform the text into one long string
     text = ''.join(fulltext)
     
+    
     #Replace the dummy parameter in brackets with the parameter from the table
-    for i, param in enumerate(names):    
+    for i, param in enumerate(names):
         if param == 'jobnum':
+            continue
+        if param == 'datatag':
             continue
         else:
             start = text.find(param + "='")+len(param+"='")
@@ -243,7 +246,7 @@ def create(path, table, names, NAME, wttsfile, samplepath = '', nzeros=3, \
                 text = text[:start] + table[i][1:-1] + text[end:]
             else:
                 text = text[:start] + str(table[i]) + text[end:]
-                
+        
     
     #Replace the WTTS file
     start = text.find('set filewtts=')+len('set filewtts=')
@@ -273,7 +276,7 @@ def create(path, table, names, NAME, wttsfile, samplepath = '', nzeros=3, \
     newjob.close()
     
 
-def create_runall(jobstart, jobend, clusterpath, outpath = '', samplepath = ''):
+def create_runall(jobstart, jobend, clusterpath, outpath = '', samplepath = '', nzeros = 3):
     '''
     shock.create_runall()
     
@@ -309,6 +312,11 @@ def create_runall(jobstart, jobend, clusterpath, outpath = '', samplepath = ''):
     end = start +len(text[start:].split(' runall.csh')[0])
     text = text[:start] + str(int(jobend)) + text[end:]
     
+    #Replace nzeros
+    start = text.find('job%0')+len('job%0')
+    end = start +len(text[start:].split('d" $SGE_TASK_ID')[0])
+    text = text[:start] + str(int(nzeros)) + text[end:]
+    
     #Turn the text back into something that can be written out
     outtext = [s + '\n' for s in text.split('\n')]
     
@@ -317,6 +325,7 @@ def create_runall(jobstart, jobend, clusterpath, outpath = '', samplepath = ''):
     newrunall.writelines(outtext)
     newrunall.close()
     
+
 
 def modelplot(F,jobnums, f, targ, wtarg, datatag,\
     wttspath = '/Users/Connor/Desktop/Research/shock/data/wtts/scaled/',\

@@ -4,11 +4,11 @@ from astropy.io import ascii
 import shock
 
 ## Set up paths ect.
-path = '/Users/Connor/Desktop/Research/shock/models/gmaur/veil0.2/' #Where to write the jobfiles +  the parameter list
+path = '/Users/Connor/Desktop/Research/shock/veilmodels/test/' #Where to write the jobfiles +  the parameter list
 samplepath = '/Users/Connor/Desktop/Research/shock/code/' #Location of the sample file. For now, keeping it the same location as this file
-outpath = '/Users/Connor/Desktop/Research/shock/models/gmaur/veil0.2/'
-NAME = 'gmaur'
-jobnumstart = 8
+outpath = '/Users/Connor/Desktop/Research/shock/veilmodels/test/'
+NAME = 'cschas'
+jobnumstart = 1
 
 #Info for scaling the WTTS photosphere
 datatag = 'HSTv3'

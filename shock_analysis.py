@@ -15,12 +15,10 @@ def gauss(x, *p):
 #Set up target
 targ  = 'gmaur'
 wtarg = 'hbc427'
-tags = ['HSTv1']
+tags = ['HSTv1', 'HSTv2']
 
 cttspath = '/Users/Connor/Desktop/Research/shock/data/ctts/'
 modelpath = '/Users/Connor/Desktop/Research/shock/veilmodels/test/'
-
-
 
 #If it's necessary to change these, you can, but the defaults should be ok for most purposes
 modeltag = targ
@@ -31,6 +29,7 @@ paramfile = targ+'_job_params.txt'
 #Set the number of MCMC iterations + burnin
 Nruns = 5000
 burnin = 1000
+nzeros = 4
 
 #PROBABLY DO NOT NEED TO CHANGE ANYTHING BELOW HERE
 #Define some constants
@@ -51,12 +50,13 @@ veils = np.unique(np.array(table['VEILING']))
 #Find models with matching values of veiling
 #NOTE: This will only work where the stellar parameters do not change (i.e., only F changes).
 veilmodels = np.array([np.where(np.array(table['VEILING']) == v)[0] for v in veils])
+tagmodels =  np.array([np.where(np.array(table['datatag']) == "'"+t+"'")[0] for t in tags])
 
 #Now loop over each data tag
 for datatag in tags:
     
     #Prepare an array to accept results from each set of models
-    bigsample = []
+#    bigsample = []
     chi2 = []
     
     #Loop over each value of veiling to ensure that each model selected uses a consistant veiling value
@@ -64,29 +64,31 @@ for datatag in tags:
         print(i)
         
         #Grab the wtts spectra for the first model with a given veiling value
-        wtts = edge.loadPickle(targ+'_'+wtarg + '_' + str(table['jobnum'][veilmodels[np.where(veils == veil)[0][0]][0]]).zfill(3), picklepath = modelpath)
+        #Need to make it grab the right wtts file (since they are now scaled using the CTTS spectra)
+        wtts_model = table['jobnum'][np.intersect1d(veilmodels[(veils == veil)][0], tagmodels[(tags == datatag)])[0]]
+        wtts = edge.loadPickle(targ+'_'+wtarg + '_' + str(wtts_model).zfill(nzeros), picklepath = modelpath)
         
         #Get all the values for F for a given veiling value, and trim off the extra quotation marks
         F = [x[1:-1] for x in np.array(table['BIGF'][veilmodels[veils == veil]])[0]]
         jobs = np.array(table['jobnum'][veilmodels[veils == veil][0]])
         
         #Set up the MCMC chain
-        sampler = shock.chisqr(ctts, wtts, F, jobs, targ, datatag, MCMC = True, Nruns = Nruns, modelpath = modelpath)
+        sampler = shock.chisqr(ctts, wtts, F, jobs, targ, datatag, MCMC = True, Nruns = Nruns, modelpath = modelpath, nzeros = nzeros)
         samples = sampler.chain[:, burnin:, :].reshape((-1, len(F)))
         
         f = [np.median(samples[:,x]) for x in np.arange(len(F))]
         
         #Record the chi2 value for the best fit given this value of veiling
-        chi2.append(shock.chisqr(ctts, wtts, F, jobs, targ, datatag, f = f, modelpath = modelpath))
+        chi2.append(shock.chisqr(ctts, wtts, F, jobs, targ, datatag, f = f, modelpath = modelpath, nzeros = nzeros))
         
         #Stack the results from the MCMC up. NOT SURE THIS WORKS AT THE MOMENT (WAS ORIGINALLY USING VSTACK)
-        if i == 0:
-            bigsample = np.zeros(np.shape(samples))
-        else:
-            bigsample = np.vstack([bigsample,samples])
+#        if i == 0:
+#            bigsample = np.zeros(np.shape(samples))
+#        else:
+#            bigsample = np.vstack([bigsample,samples])
     
     #Make computer yell at you when it finishes
-    for x in np.arange(30):
+    for x in np.arange(10):
         print('\a')
         time.sleep(.2)
     
@@ -136,7 +138,7 @@ for datatag in tags:
     bestsampler = shock.chisqr(ctts, wtts, bestF, bestjobs, targ, datatag,\
         maskfile = '/Users/Connor/Desktop/Research/shock/code/mask.dat',\
         modelpath = modelpath,\
-        part_interp = True, MCMC = True, Nruns = Nruns)
+        part_interp = True, MCMC = True, Nruns = Nruns, nzeros = nzeros)
     bestsamples = bestsampler.chain[:, burnin:, :].reshape((-1, len(F)))
     bestf = [np.median(bestsamples[:,x]) for x in np.arange(len(F))]
     
@@ -162,7 +164,7 @@ for datatag in tags:
     bestchi2 = shock.chisqr(ctts, wtts, bestF, bestjobs, targ, datatag, f = bestf,\
         maskfile = '/Users/Connor/Desktop/Research/shock/code/mask.dat',\
         modelpath = modelpath,\
-        part_interp = True, MCMC = False)
+        part_interp = True, MCMC = False, nzeros = nzeros)
     
     #Make the final shock plot
     shock.modelplot(bestF,bestjobs, bestf, targ, wtarg, datatag,\
@@ -171,7 +173,7 @@ for datatag in tags:
         modelpath = modelpath,\
         plotpath = modelpath,\
         mask = False, maskfile = '/Users/Connor/Desktop/Research/shock/code/mask.dat',\
-        plottarg = '', chi2 = str(bestchi2)[0:5], nzeros = 3, mdot = mdot, xlim = [2e3, 7e3], ylim = [1e-15, 1e-8],\
+        plottarg = '', chi2 = str(bestchi2)[0:5], nzeros = nzeros, mdot = mdot, xlim = [2e3, 7e3], ylim = [1e-15, 1e-8],\
         photometry = True, spectrim = 0, smooth = 1, loc = 'best', errors = False)
     
 

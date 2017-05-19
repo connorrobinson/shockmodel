@@ -20,6 +20,10 @@ set BIGF='1E+12'
 #FILLING     filling factor
 set FILLING='0.01'
 
+#Add in a variable for the veiling. Note that this doesn't actually do anything in the code
+#but it does allow collate/shock_create to latch on to it. 
+set VEILING='0.2'
+
 #directory where program is are kept:
 set DIRPROG=/project/bu-disks/shared/shockmodels/PROGRAMS
 #directory where data files are kept:
