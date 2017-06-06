@@ -113,45 +113,6 @@ def scale(targ, wtarg, datatag, veiling, Rctts, dctts, jobnum, photometry = 0,\
         wphot = np.hstack([wphot, wtts.photometry[x]['lFl']])
         wphotwl = np.hstack([wphotwl, wtts.photometry[x]['wl']])
     
-    #Flatten all the photometry into a single array
-    # phot = np.array([])
-    # photwl = np.array([])
-    # for x in ctts.photometry.keys():
-    #     phot = np.hstack([phot, ctts.photometry[x]['lFl']])
-    #     photwl = np.hstack([photwl, ctts.photometry[x]['wl']])
-    #
-    # #Get the V band points within maxdiff of the central wl
-    # closest = np.abs(photwl - Vwl) < maxdiff
-    # Vfluxes = phot[closest]
-    # # Now check if there are valid photometry
-    # if np.sum(closest) == 0:
-    #     raise ValueError('shock.scale ERROR: NO VALID CTTS JOHNSON V BAND PHOTOMETRY. WAVELENGTH MUST BE WITHIN 10nm OF 0.554')
-    # #if there are, scale to the mean value of the photometry
-    # elif np.sum(closest) == 1:
-    #     Vflux = Vfluxes[0]
-    # else:
-    #     print('MULTIPLE VALUES OF V BAND PHOTOMETRY FOUND FOR CTTS: TAKING MEDIAN VALUE!')
-    #     Vflux = np.median(Vfluxes)
-    #
-    # #Repeat for wtts
-    # wphot = np.array([])
-    # wphotwl = np.array([])
-    # for x in wtts.photometry.keys():
-    #     wphot = np.hstack([wphot, wtts.photometry[x]['lFl']])
-    #     wphotwl = np.hstack([wphotwl, wtts.photometry[x]['wl']])
-    #
-    # wclosest = np.abs(wphotwl - Vwl) < maxdiff
-    # wVfluxes = wphot[wclosest]
-    # # Now check if there  valid photometry
-    # if np.sum(closest) == 0:
-    #     raise ValueError('shock.scale ERROR: NO VALID WTTS JOHNSON V BAND PHOTOMETRY. WAVELENGTH MUST BE WITHIN 10nm OF 0.554')
-    # #if there are, scale to the mean value of the photometry
-    # elif  np.sum(closest) == 1:
-    #     wVflux = wVfluxes[0]
-    # else:
-    #     print('MULTIPLE VALUES OF V BAND PHOTOMETRY FOUND FOR WTTS: TAKING MEDIAN VALUE!')
-    #     wVflux = np.median(wVfluxes)
-    
     #Now scale the spectra to the surface of the star
     #The code takes in the flux in units of erg s^(-1) cm^(-2) Ang ^(-1) (at the star)
     #Need to scale the observed flux of the WTTS to the surface of the CTTS
@@ -493,10 +454,10 @@ def modelplot(F,jobnums, f, targ, wtarg, datatag,\
     
     
     
-def chisqr(ctts, wtts, F, jobnums, targ, datatag, f = None,
+def chisqr(ctts, F, jobnums, targ, datatag, f = None,
     maskfile = '/Users/Connor/Desktop/Research/shock/code/mask.dat',\
     modelpath ='/Users/Connor/Desktop/Research/shock/models/',\
-    part_interp = True, MCMC = False, Nruns = 2500, nzeros = 3):
+    part_interp = True, MCMC = False, Nruns = 2500, nzeros = 3, Nthreads = 1):
     
     '''
     shock.chisqr
@@ -534,16 +495,6 @@ def chisqr(ctts, wtts, F, jobnums, targ, datatag, f = None,
     
     if f == None:
         f = np.zeros(len(F))
-    
-    #Get the number of photometry points to trim off the end of the model
-    #nphot = len(wtts.photometry[wttsphottag]['lFl'])
-    #wphot = np.array([])
-    #wphotwl = np.array([])
-    # for x in ctts.photometry.keys():
-    #     wphot = np.hstack([wphot, wtts.photometry[x]['lFl']])
-    #     wphotwl = np.hstack([wphotwl, wtts.photometry[x]['wl']])
-    #
-    # nphot = len(wphot)
     
     if part_interp == False:
         wlmodel, Fall_model, Fhp_model, Fpre_model, Fphot_model = modelsum(targ, f, F, jobnums, nzeros = nzeros, modelpath = modelpath)
@@ -662,7 +613,7 @@ def chisqr(ctts, wtts, F, jobnums, targ, datatag, f = None,
             ndim, nwalkers = len(F), 100
             pos = [.5 + 1e-1*np.random.randn(ndim) for i in range(nwalkers)]
             
-            sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob, args=(wl_int, Fphot, Fhp, Fpre, flux, err))
+            sampler = emcee.EnsembleSampler(nwalkers, ndim, lnprob, args=(Fphot, Fhp, Fpre, flux, err), threads = Nthreads)
             sampler.run_mcmc(pos, Nruns)
             
             return sampler
@@ -722,18 +673,10 @@ def modelsum(targ, f, F,jobnums,\
         modelpath = modelpath+targ+'/'
     
     if len(F) == 1:
-#        modelname = ['fort30.'+targ+str(jobnums).zfill(nzeros)]
         modelname = [targ+'_'+str(jobnums).zfill(nzeros)+'.fits']
         
     else:
-        #modelname = ['fort30.'+targ+str(job).zfill(nzeros) for job in jobnums]
         modelname = [targ+'_'+str(job).zfill(nzeros)+'.fits' for job in jobnums]
-    
-    #Load in the model
-    #NOTE: THIS MAY NEED TO CHANGE, NOT SURE IF THE DATA ALWAYS STARTS HERE
-#    datastart = 119
-    #datastart = 0
-#    footer = 8
     
     wl    = []
     Fhp   = []
@@ -743,13 +686,8 @@ def modelsum(targ, f, F,jobnums,\
     F_nophot =[]
     
     for i, model in enumerate(modelname):
-        #data = np.genfromtxt(modelpath+model, skip_header = datastart, usecols = [1,2,3,4], skip_footer = footer)
         data = fits.open(modelpath+model)
         if len(modelname) == 1:
-            # wl = data[:,0]
-            # Fhp = data[:,1]*data[:,0]
-            # Fpre = data[:,2]*data[:,0]
-            # Fphot = data[:,3]*data[:,0]
             
             wl = data[0].data[data[0].header['WLAXIS']]
             Fhp = data[0].data[data[0].header['HEATAXIS']]
@@ -760,10 +698,6 @@ def modelsum(targ, f, F,jobnums,\
                 Ftot = (1-f)*Fphot+f*(Fhp+Fpre)
                 Fall = f*(Fhp+Fpre) + (1-f)*Fphot 
         else:
-            # wl.append(data[:,0])
-            # Fhp.append(data[:,1]*data[:,0])
-            # Fpre.append(data[:,2]*data[:,0])
-            # Fphot.append(data[:,3]*data[:,0])
             
             wl.append(data[0].data[data[0].header['WLAXIS']])
             Fhp.append(data[0].data[data[0].header['HEATAXIS']])
@@ -791,22 +725,77 @@ def modelsum(targ, f, F,jobnums,\
         
         return wl, Fhp, Fpre, Fphot
 
+def MCMCsolve(table, ctts, jobs, burnin = 1000, Nruns = 5000, modelpath = '', nzeros = 3, Nthreads = 1):
+    '''
+    shock.MCMCsolve()
+    
+    PURPOSE:
+        Short function that actually goes about running an MCMC for a set of jobs
+    
+    INPUTS:
+        table: [astropy.ascii table] Table containing all the model information produced by shock_create
+        ctts: [EDGE obs file] Classical T Tauri star
+        wtts: [EDGE obs file] Weak T Tauri star
+        jobs: [int arr/list] Array of job numbers for the models that will be used for fitting
+    
+    OPTIONAL INPUTS:
+        burnin: [int] Number of MCMC steps used for the burn in
+        Nruns: [int] Number of MCMC steps
+        modelpath: [str] Location of all the models + param files
+        nzeros: [int] Zero padding for the jobs
+    
+    NOTE: All the models MUST have the same veiling + generated from the same dataset for any of this to make sense
+    
+    AUTHOR:
+        Connor Robinson, May 19th, 2017
+    
+    '''
+    targ = ctts.name
+    datatag = np.array(table['datatag'][table['jobnum'] == jobs[0]])[0][1:-1]
+    
+    #Get all the values for F for the set of jobs given
+    F = [np.array(table['BIGF'][table['jobnum'] == x])[0][1:-1] for x in jobs]
+    
+    #Set up the MCMC chain
+    sampler = chisqr(ctts, F, jobs, targ, datatag, MCMC = True, Nruns = Nruns, modelpath = modelpath, nzeros = nzeros, Nthreads = Nthreads)
+    return sampler.chain[:, burnin:, :].reshape((-1, len(F)))
+
+def mdot(Mctts, Rctts, F, f, Ri = 5):
+    '''
+    shock.mdot()
+    
+    PURPOSE:
+        Calculates mdot in units of solar masses per year
+    
+    INPUTS:
+        Mctts: [float] Mass of the CTTS in solar masses
+        Rctts: [float] Radius of the CTTS in solar radii
+        F: [Str Array] Array of flux values
+        f: [float array] Array of filling fractions
+    
+    OPTIONAL INPUTS:
+        Ri: [float] Assumed truncation radius in stellar radii (default is 5)
+    
+    '''
+    G = 6.67e-8 #cm^3 g^-1 s^-2
+    Msun = 2e33 #g
+    Rsun = 6.957e10 #cm
+    
+    vs = np.sqrt(2*G*(Mctts*Msun)/(Rctts*Rsun)) * np.sqrt(1-1/Ri)
+    return 8*np.pi*(Rctts*Rsun)**2/vs**2 * np.sum(np.array([float(x) for x in F]) * f)*(365*24*60*60/Msun)
+
 #Define a bunch of functions for doing an emcee fit
-def lnlike(f, wl, Fphot, Fhp, Fpre, flux, err):
-    #m, b, lnf = theta
-    #model = m * x + b
+def lnlike(f, Fphot, Fhp, Fpre, flux, err):
     Fall = (1-np.sum(f)) * Fphot[0] + np.dot(f,(Fhp+Fpre))
-    #inv_sigma2 = 1.0/(yerr**2 + model**2*np.exp(2*lnf))
     return np.sum(-0.5*((flux - Fall)/err)**2 - np.log(np.sqrt(2*np.pi) * err))
 
-def lnprob(f, wl, Fphot, Fhp, Fpre, flux, err):
+def lnprob(f, Fphot, Fhp, Fpre, flux, err):
     lp = lnprior(f)
     if not np.isfinite(lp):
         return -np.inf
-    return lp + lnlike(f, wl, Fphot, Fhp, Fpre, flux, err)
+    return lp + lnlike(f, Fphot, Fhp, Fpre, flux, err)
 
 def lnprior(f):
-    #m, b, lnf = theta
     #Define a top hat between 0 and 1.
     if len(f[f<0]) != 0 or len(f[f>1]) !=0:
         return -np.inf
