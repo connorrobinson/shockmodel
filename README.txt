@@ -95,5 +95,18 @@ ncores: My laptop has 4 cores, so I have assigned all 4 cores to work on it (ess
 Ri: Inner edge of the disk
 
 
+OPTIONAL SCRIPT: maskspec.py
+------------------------------------------------------
+This script allows you to mask out strong spectral features by adding the desired wavelength range to a list. 
+This list is written out to mask.dat. The current mask.dat covers most of the strong spectral features, so it changing this is probably
+not necessary. 
+
+If changes are made to this file, you will also need to change the paths and object that is plotted.
+
+
+
+
+
+
 
 
