@@ -5,15 +5,18 @@ import shock
 
 ## Set up paths ect.
 path = '/Users/Connor/Desktop/Research/shock/veilmodels/test/' #Where to write the jobfiles +  the parameter list
-clusterpath = '/projectnb/bu-disks/connorr/shock/test/'
+clusterpath = '/projectnb/bu-disks/connorr/shock/test/' #location of where the models will be placed on the cluster
 samplepath = '/Users/Connor/Desktop/Research/shock/code/' #Location of the sample file. For now, keeping it the same location as this file
+wttspath = '/Users/Connor/Desktop/Research/shock/data/wtts/' #Location of the dereddened WTTS pickle files
+cttspath = '/Users/Connor/Desktop/Research/shock/data/ctts/' #Location of the dereddened CTTS pickle files
+plotpath = '/Users/Connor/Desktop/Research/shock/plotting/scaled/' #Location you want plots sent (if plotting is turned on in the shock.scale call below)
 
 NAME = 'gmaur'
 jobnumstart = 1
 
 #Info for scaling the WTTS photosphere
 datatag = ['HSTv1', 'HSTv2', 'HSTv3', 'HSTv4', 'HSTv5']
-wtarg = 'hbc427'
+wtarg = 'recx1'
 
 #Parameters for the model
 DISTANCE = [140] #Distance in pc
@@ -52,9 +55,8 @@ for i, row in enumerate(table[table.colnames]):
     
     #Scale the WTTS spectra using veiling + the distance to the object
     shock.scale(NAME, wtarg, row['datatag'][1:-1], row['VEILING'], row['RADIO'], row['DISTANCE'], row['jobnum'], photometry = 0,\
-         wttspath = '/Users/Connor/Desktop/Research/shock/data/wtts/',\
-         cttspath = '/Users/Connor/Desktop/Research/shock/data/ctts/',\
-         plotpath = '/Users/Connor/Desktop/Research/shock/plotting/scaled/',\
+         wttspath = wttspath,\
+         cttspath = cttspath,\
          outpath  = path,\
          wttstag = 'HST', clob = 1, plot = 0, nzeros = nzeros)
     

@@ -5,93 +5,140 @@ import matplotlib.pyplot as plt
 import pdb
 import corner
 from astropy.io import ascii
-from scipy import optimize
-import time
+from multiprocessing import Pool
+from functools import partial
 
-def gauss(x, *p):
-    A, mu, sigma = p
-    return A*np.exp(-(x-mu)**2/(2.*sigma**2))
+'''
+veilSolver.py
 
+PURPOSE:
+    This is an analysis tool that takes the input from many Calvet 98 shock models and finds the optimal value of veiling and the associated scale factors.
+    It works by finding the best scale factors for each value of veiling using an MCMC appoach using the emcee package. The median model from the MCMC chains
+    is then compared for each veiling, and fit with a Gaussian. The peak of this gaussian is the best fit value of the veiling.
+    
+INPUTS:
+    This is a script, so there are no formal inputs, but you will need to change the name of the target, the name of the associated WTTS used to set the photosphere, and the
+    observation tags, (set previously upon the creation of the EDGE data file).
+
+OPTIONAL INPUTS:
+    The number of MCMC runs, ect can be modified as well. More detailed descriptions are shown below
+
+AUTHOR:
+    Connor Robinson, June 2, 2017
+'''
 #Set up target
 targ  = 'gmaur'
-wtarg = 'hbc427'
-tags = ['HSTv1', 'HSTv2']
+wtarg = 'recx1'
+tags = ['HSTv2', 'HSTv3', 'HSTv4', 'HSTv5']
 
 cttspath = '/Users/Connor/Desktop/Research/shock/data/ctts/'
-modelpath = '/Users/Connor/Desktop/Research/shock/veilmodels/test/'
+modelpath = '/Users/Connor/Desktop/Research/shock/veilmodels/gmaur/'
+maskfile = '/Users/Connor/Desktop/Research/shock/code/mask.dat'
 
 #If it's necessary to change these, you can, but the defaults should be ok for most purposes
+nzeros = 4 #Zero padding
+Nruns = 5000  #MCMC iterations
+burnin = 1000 #Burn in
+ncores = 4 #Number of cores for multiprocessings
+Ri = 5 #Inner disk edge
+
 modeltag = targ
 plottarg = targ
 figpath = modelpath
 paramfile = targ+'_job_params.txt'
 
-#Set the number of MCMC iterations + burnin
-Nruns = 5000
-burnin = 1000
-nzeros = 4
+## PROBABLY DO NOT NEED TO CHANGE ANYTHING BELOW HERE
+dummy_f = .01 #Dummy value of f for running code. If the code is run with f too large, it will crash.
 
-#PROBABLY DO NOT NEED TO CHANGE ANYTHING BELOW HERE
-#Define some constants
-Ri = 5 #Stellar radii
-G = 6.67e-8 #cm^3 g^-1 s^-2
-Msun = 2e33 #g
-Rsun = 6.957e10 #cm
+def solveVeil(veil, table=None, datatag=None, ctts=None, wtarg=None, burnin=None, modelpath=None, nzeros=None, Nruns=None):
+    '''
+    solveVeil()
+    
+    PURPOSE:
+        Function that finds the correct models for a given veiling/datatag and then runs the MCMC grid
+        It exists as a function in order to utilize multi-processing.
+    
+    INPUTS: NOTE: ALL OF THE INPUTS ARE NECESSARY.
+        veil: [float] Value for the veiling
+        table: [astropy.ascii table] Table generated from the parameter file containing all the info about the models
+        datatag: [str] Tag associated with a given data set (e.g. 'HSTv1')
+        ctts: [EDGE obs object] Observation object for the CTTS
+        wtarg: [str] Weak T Tauri star associated with the models
+        burnin: [int] Burn in for the MCMC
+        nzeros: [int] Zero padding for the job files
+        Nruns: [int] Number of MCMC interations
+    
+    RETURNS:
+        (veil, f, chi2): [tuple] Contains the veiling, the median value of the samples 
+                         of f for each F, and the chi2 value of the median
+    
+    AUTHOR:
+        Connor Robinson, May 19th, 2017
+    '''
+    #Get the jobs for each value of veiling + datatag
+    print(veil)
+    vmodels =   np.array(table['jobnum'][table['VEILING'] == veil])
+    tagmodels = np.array(table['jobnum'][table['datatag'] == "'"+datatag+"'"])
+    jobs = np.intersect1d(vmodels, tagmodels)
+    
+    #Solve for the best fit, then compute the chi2 value
+    samples = shock.MCMCsolve(table, ctts, jobs, burnin = burnin, modelpath = modelpath, nzeros = nzeros, Nruns = Nruns)#, Nthreads = 3)
+    
+    F = [np.array(table['BIGF'][table['jobnum'] == x])[0][1:-1] for x in jobs]
+    f = [np.median(samples[:,x]) for x in np.arange(len(F))]
+    return veil, f, shock.chisqr(ctts, F, jobs, targ, datatag, f = f, modelpath = modelpath, nzeros = nzeros)
 
-#Dummy value of f for running code. If the code is run with f too large, it will crash.
-#Rescaling is done inside code.
-dummy_f = .01
+def gauss(x, *p):
+    '''
+    gauss()
+    
+    PURPOSE:
+        Returns a gaussian. Used for fitting veiling
+    
+    INPUTS:
+        x: [float] Number/array for the x value
+        p: Amplitude, offset and standard deviation of the gaussian
+    
+    RETURNS:
+        An array containing a gaussian evaluated at each x
+    
+    '''
+    A, mu, sigma = p
+    return A*np.exp(-(x-mu)**2/(2.*sigma**2))
+
+
+
+#Load in the data and parameter table and grab the unique veiling values
 ctts = edge.loadPickle(targ, picklepath = cttspath)
-
-#Load in the parameter table and grab the unique veiling values
-table = ascii.read(modelpath+targ+'_job_params.txt', data_start = 1, delimiter = ',')
+table = ascii.read(modelpath+paramfile, data_start = 1, delimiter = ',')
 veils = np.unique(np.array(table['VEILING']))
 
 #Find models with matching values of veiling
 #NOTE: This will only work where the stellar parameters do not change (i.e., only F changes).
-veilmodels = np.array([np.where(np.array(table['VEILING']) == v)[0] for v in veils])
-tagmodels =  np.array([np.where(np.array(table['datatag']) == "'"+t+"'")[0] for t in tags])
+veilmodels = np.array(table['jobnum'][np.array([np.where(np.array(table['VEILING']) == v)[0] for v in veils])])
 
-#Now loop over each data tag
+#Initialize a pool for multiprocessing
+pool = Pool()
+
 for datatag in tags:
+    results = []
     
-    #Prepare an array to accept results from each set of models
-#    bigsample = []
-    chi2 = []
+    ##Solve for the best veilings + filling parameters using multiprocessing
+    #Create a new function in which all the parameters are fixed except the veiling
+    partial_solveVeil = partial(solveVeil, \
+       table = table, datatag = datatag, ctts = ctts, \
+       wtarg = wtarg, burnin = burnin, modelpath = modelpath, \
+      nzeros = nzeros, Nruns = Nruns)
     
-    #Loop over each value of veiling to ensure that each model selected uses a consistant veiling value
-    for i, veil in enumerate(veils):
-        print(i)
-        
-        #Grab the wtts spectra for the first model with a given veiling value
-        #Need to make it grab the right wtts file (since they are now scaled using the CTTS spectra)
-        wtts_model = table['jobnum'][np.intersect1d(veilmodels[(veils == veil)][0], tagmodels[(tags == datatag)])[0]]
-        wtts = edge.loadPickle(targ+'_'+wtarg + '_' + str(wtts_model).zfill(nzeros), picklepath = modelpath)
-        
-        #Get all the values for F for a given veiling value, and trim off the extra quotation marks
-        F = [x[1:-1] for x in np.array(table['BIGF'][veilmodels[veils == veil]])[0]]
-        jobs = np.array(table['jobnum'][veilmodels[veils == veil][0]])
-        
-        #Set up the MCMC chain
-        sampler = shock.chisqr(ctts, wtts, F, jobs, targ, datatag, MCMC = True, Nruns = Nruns, modelpath = modelpath, nzeros = nzeros)
-        samples = sampler.chain[:, burnin:, :].reshape((-1, len(F)))
-        
-        f = [np.median(samples[:,x]) for x in np.arange(len(F))]
-        
-        #Record the chi2 value for the best fit given this value of veiling
-        chi2.append(shock.chisqr(ctts, wtts, F, jobs, targ, datatag, f = f, modelpath = modelpath, nzeros = nzeros))
-        
-        #Stack the results from the MCMC up. NOT SURE THIS WORKS AT THE MOMENT (WAS ORIGINALLY USING VSTACK)
-#        if i == 0:
-#            bigsample = np.zeros(np.shape(samples))
-#        else:
-#            bigsample = np.vstack([bigsample,samples])
+    #Now run it on multiple processers!
+    results = pool.map(partial_solveVeil, veils)
     
-    #Make computer yell at you when it finishes
-    for x in np.arange(10):
-        print('\a')
-        time.sleep(.2)
+    #Parse results from the multiprocessing into something more useful
+    resultveils = np.array([x[0] for x in results])
+    f = np.array([x[1] for x in results])
+    chi2 = np.array([x[2] for x in results])
     
+    ## Calculate the best value of the veiling based on a chi2 minimization
     #Calculate the probability for each value of veiling
     prob = np.exp(-np.array(chi2)/2)/np.sum(np.exp(-np.array(chi2)/2))
     
@@ -108,6 +155,7 @@ for datatag in tags:
     plt.plot(gveils, fit, color = 'k', label = 'Gaussian fit', lw = 2, alpha = .5)
     colors = ['b', 'g', 'r']
     stdevs = [0,1,2]
+    
     #Loop over each stdev
     for i, stdev in enumerate(stdevs):
         xlow = [np.argmin(np.abs(gveils - (coeff[1] + coeff[2]*stdev) )), np.argmin(np.abs(gveils - (coeff[1] + coeff[2]*(1+stdev)) ))]
@@ -123,29 +171,31 @@ for datatag in tags:
     plt.ylabel(r'$P\,[r_v]$', fontsize = 17)
     plt.xlabel(r'$r_v$', fontsize = 17)
     plt.ylim([0, 0.1])
-    plt.xlim([0, .6])
-    
+    plt.xlim([0, 1.0])
     plt.savefig(figpath+targ+'_'+datatag+'_veiling_prob.pdf')
     plt.show()
     
-    #Now plot up the triangle plot for the MCMC fit for the best model
-    #First get the best value of veiling in the models that have been run
+    ## Make the corner plot for the best model
+    #First get the job for the best fit for all veilings
     bestveil = np.argmin(np.abs(coeff[1] - veils))
-    #Get the jobs associated with bestveil
-    bestjobs = np.array(table['jobnum'][veilmodels[bestveil]])
-    bestF = [x[1:-1] for x in np.array(table['BIGF'][veilmodels[bestveil]])]
-    #Re-run the MCMC one last time for the best fit
-    bestsampler = shock.chisqr(ctts, wtts, bestF, bestjobs, targ, datatag,\
-        maskfile = '/Users/Connor/Desktop/Research/shock/code/mask.dat',\
-        modelpath = modelpath,\
-        part_interp = True, MCMC = True, Nruns = Nruns, nzeros = nzeros)
-    bestsamples = bestsampler.chain[:, burnin:, :].reshape((-1, len(F)))
-    bestf = [np.median(bestsamples[:,x]) for x in np.arange(len(F))]
+    
+    #Grab the best jobs for a given datatag
+    vmodels = np.array(table['jobnum'][veilmodels[bestveil]])
+    tagmodels = np.array(table['jobnum'][table['datatag'] == "'"+datatag+"'"])
+    bestjobs = np.intersect1d(vmodels, tagmodels)
+    bestF = np.array( [table['BIGF'][table['jobnum'] == x][0][1:-1] for x in bestjobs])
+    
+    #Run the MCMC for the best models again
+    bestsamples = shock.MCMCsolve(table, ctts, bestjobs, burnin = burnin, modelpath = modelpath, nzeros = nzeros, Nruns = Nruns)
+    bestf = [np.median(bestsamples[:,x]) for x in np.arange(len(bestF))]
     
     #Add one more 'sigma' contours to my plot
     levels = 1.0 - np.exp(-0.5 * np.arange(0.5, 2.6, 0.5) ** 2)
     
+    #Set up the labels for the axes
     labels = [r'$' + str(x).split('E')[0] + r'\times 10^{'+str(x).split('E+')[1]+'}\,\,[\%]$' for x in bestF]
+    
+    #Make the corner plot!
     corner.corner(bestsamples*100, color = 'g', labels = labels, \
         plot_datapoints = 0, \
         plot_density = False, \
@@ -156,27 +206,21 @@ for datatag in tags:
     plt.show()
     
     #Calculate the mass accretion rate in useful units
-    Mctts = table['MASS'][bestveil]
-    Rctts = table['RADIO'][bestveil]
-    vs = np.sqrt(2*G*(Mctts*Msun)/(Rctts*Rsun)) * np.sqrt(1-1/Ri)
-    mdot = 8*np.pi*(Rctts*Rsun)**2/vs**2 * np.sum(np.array([float(x) for x in bestF]) * bestf)*(365*24*60*60/Msun)
+    mdot = shock.mdot(table['MASS'][bestveil], table['RADIO'][bestveil], bestF, bestf, Ri = Ri)
     
-    bestchi2 = shock.chisqr(ctts, wtts, bestF, bestjobs, targ, datatag, f = bestf,\
-        maskfile = '/Users/Connor/Desktop/Research/shock/code/mask.dat',\
+    
+    #Calculate the chi2 for the best model
+    bestchi2 = shock.chisqr(ctts, bestF, bestjobs, targ, datatag, f = bestf,\
+        maskfile = maskfile,\
         modelpath = modelpath,\
         part_interp = True, MCMC = False, nzeros = nzeros)
     
     #Make the final shock plot
-    shock.modelplot(bestF,bestjobs, bestf, targ, wtarg, datatag,\
+    shock.modelplot(bestF, bestjobs, bestf, targ, wtarg, datatag,\
         wttspath = modelpath,\
         cttspath = cttspath,\
         modelpath = modelpath,\
         plotpath = modelpath,\
-        mask = False, maskfile = '/Users/Connor/Desktop/Research/shock/code/mask.dat',\
+        mask = False, maskfile = maskfile,\
         plottarg = '', chi2 = str(bestchi2)[0:5], nzeros = nzeros, mdot = mdot, xlim = [2e3, 7e3], ylim = [1e-15, 1e-8],\
         photometry = True, spectrim = 0, smooth = 1, loc = 'best', errors = False)
-    
-
-def gauss(x, *p):
-    A, mu, sigma = p
-    return A*np.exp(-(x-mu)**2/(2.*sigma**2))
