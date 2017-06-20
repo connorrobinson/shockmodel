@@ -8,6 +8,7 @@ from astropy.io import ascii
 from multiprocessing import Pool
 from functools import partial
 from scipy import optimize
+import os
 '''
 shock_analysis.py
 
