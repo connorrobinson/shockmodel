@@ -7,7 +7,7 @@ import corner
 from astropy.io import ascii
 from multiprocessing import Pool
 from functools import partial
-
+from scipy import optimize
 '''
 veilSolver.py
 
@@ -49,6 +49,9 @@ paramfile = targ+'_job_params.txt'
 
 ## PROBABLY DO NOT NEED TO CHANGE ANYTHING BELOW HERE
 dummy_f = .01 #Dummy value of f for running code. If the code is run with f too large, it will crash.
+
+os.system('ulimit -s 60000') #Increase the allowed stack for python processing. 
+
 
 def solveVeil(veil, table=None, datatag=None, ctts=None, wtarg=None, burnin=None, modelpath=None, nzeros=None, Nruns=None):
     '''
