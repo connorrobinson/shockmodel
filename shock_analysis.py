@@ -9,7 +9,7 @@ from multiprocessing import Pool
 from functools import partial
 from scipy import optimize
 '''
-veilSolver.py
+shock_analysis.py
 
 PURPOSE:
     This is an analysis tool that takes the input from many Calvet 98 shock models and finds the optimal value of veiling and the associated scale factors.
