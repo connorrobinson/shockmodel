@@ -3,12 +3,12 @@ import matplotlib.pyplot as plt
 import pdb
 import prepost
 import scipy.interpolate as interpolate
+import scipy.integrate as integrate
 import os
 from glob import glob
 import matplotlib.cm as cm
 import matplotlib.colors as colors
 import matplotlib.colorbar as cb
-
 
 '''
 prepost.py
@@ -22,6 +22,85 @@ PURPOSE:
 AUTHOR:
     Connor Robinson August 24th, 2017
 '''
+
+def wrapper(M, R, BIGF, name, ctfile, basepath, cooltag, cloudy, Rstop = 0.1):
+    
+    '''
+    prepost.wrapper
+    
+    PURPOSE:
+        Calls the rest of the code in a single command for use on the cluster.
+    
+    INPUTS:
+        M:[float] Mass of the star in solar units
+        R:[float] Radius of the star in solar units
+        Flog:[float] Energy flux into the star from accretion (ergs cm^-2 s^1)
+        name:[string] Name of the object
+        ctfile:[string] Table containing all the cooling coefficients. Has a non-standard structure. 
+        basepath:[string] Path to the top level of the directory containing
+        cooltag:[string] Tag associated with the cooling models. Default is 'cooling'. Likely do not need to change.
+        cloudy:[string] Location of the cloudy executable. 
+            
+        
+    OPTIONAL INPUTS:
+        Rstop:[float] Alternative stopping criterion for Cloudy. Either T reaches 4000K or stops at this radius (in stellar units)
+    
+    OUTPUTS:
+        Creates a fort40 file containing the flux and frequency information needed to irradiate the photosphere with the
+        following columns: nu, postshock, preshock_in, preshock_out
+    
+    
+    AUTHOR:
+        Connor Robinson, September 18th, 2017
+    
+    '''
+    
+    #Define constants
+    mh = 1.67e-24 #g
+    Rsun = 6.96e10 #cm
+    c = 3e14 #microns
+    
+    Ncells = 20000 # Number of cells for postshock structure calculation
+    npoints = 100 #Number of locations to produce spectra.
+    
+    #Convert everything to float
+    Flog = np.log10(np.float(BIGF))
+    M = np.float(M)
+    R = np.float(R)
+    
+    print('M: '+str(M))
+    print('R: '+str(R))
+    print('Flog: '+str(Flog))
+    print('ctfile: '+ctfile)
+    print('basepath: '+basepath)
+    print('cooltag: '+cooltag)
+    
+    #Create the postshock structure
+    postshock = prepost.postshock_structure(Flog, M, R, Ncells = Ncells, grid2d = True, logT = True, ctfile = ctfile, dzbase = 1e0)
+    
+    #Create the postshock spectra
+    postshock_spectra = prepost.make_postshockflux(postshock, cooltag, '', name, ctfile = ctfile, basepath = basepath)
+    
+    #Make the Cloudy model for the preshock
+    pre_name = prepost.make_preshockmodel(postshock_spectra, M, R, Flog, name, '', Rstop = 0.1, Ri = 5)
+    
+    #Call Cloudy
+    os.system(cloudy + ' -p '+name)
+    
+    #Load in the results from Cloudy
+    data= np.genfromtxt(name+'.con', usecols = [0, 4, 5], skip_header = 1)
+    
+    #Convert into the correct units
+    nu = c/data[:,0]
+    postshock = postshock_spectra[:,1]/nu
+    preshock_out = data[:,1]/nu
+    preshock_in = data[:,2]/nu
+    
+    #Write out the fort40 file
+    prepost.write_output(nu, postshock, preshock_in, preshock_out, name, fill = 3, outpath = '')
+    
+    print('Pre-shock and Post-shock regions finished')
+
 
 def dvdz(Lambda, Kappa, g, v, a2):
     '''
@@ -82,7 +161,7 @@ def da2dz(Lambda, Kappa, g, v, dvdz):
     da2dz = (-2/5)*v*dvdz-(2/5)*g-(2/5)*Lambda/Kappa
     return da2dz
 
-def postshock_structure(Flog, M, R, Ri = 5, Ncells = 10000, zrange = 1/1e5, solver = 'RK',\
+def postshock_structure(Flog, M, R, Ri = 5, Ncells = 10000, dzbase = 1e3, solver = 'RK',\
     ctfile = 'coolinggrid.txt', logT = True, grid2d = True):
     '''
     prepost.postshock_structure
@@ -155,33 +234,49 @@ def postshock_structure(Flog, M, R, Ri = 5, Ncells = 10000, zrange = 1/1e5, solv
         Lamnh = alldata[0,1:]
         ct = alldata[1:,1:]
         if logT:
-            Lamfunc = interpolate.interp2d(Lamnh, LamT, ct, kind = 'cubic', fill_value = 'extrapolate')
+            Lamfunc = interpolate.interp2d(Lamnh, LamT, ct, kind = 'cubic', bounds_error = False)
         else:
-            Lamfunc = interpolate.interp2d(Lamnh, np.log10(LamT), ct, kind = 'cubic', fill_value = 'extrapolate')
+            Lamfunc = interpolate.interp2d(Lamnh, np.log10(LamT), ct, kind = 'cubic', bounds_error = False)
     
     if grid2d == False:
         alldata = np.genfromtxt(ctfile, skip_header = 1, usecols = [1,3])
         LamT = alldata[:,0]
         ct = alldata[:,1]
         if logT:
-            Lamfunc = interpolate.interp1d(LamT, ct, kind = 'cubic', fill_value = 'extrapolate')
+            Lamfunc = interpolate.interp1d(LamT, ct, kind = 'cubic', fill_value = 'extrapolate', bounds_error = False)
         else:
-            Lamfunc = interpolate.interp1d(np.log10(LamT), ct, kind = 'cubic', fill_value = 'extrapolate')
+            Lamfunc = interpolate.interp1d(np.log10(LamT), ct, kind = 'cubic', fill_value = 'extrapolate', bounds_error = False)
     
     #Construct grid
-    z = -np.linspace(0,R*Rsun*zrange, Ncells)
-    dz = z[1]-z[0]
+    #z = -np.linspace(0,R*Rsun*zrange, Ncells)
+    # nh = np.zeros(Ncells)
+    # v = np.zeros(Ncells)
+    # a2 = np.zeros(Ncells)
+    #
+    # nh[0] = nh0
+    # v[0] = v0
+    # a2[0] = a20
     
-    nh = np.zeros(Ncells)
-    v = np.zeros(Ncells)
-    a2 = np.zeros(Ncells)
+    nh = [nh0]
+    v = [v0]
+    a2 = [a20]
     
-    nh[0] = nh0
-    v[0] = v0
-    a2[0] = a20
+    z = [0]
+    
+    #Set the threshold for how much the solution can change between steps before the cell splits.
+    thresh = 0.05
+    
+    #Set the minimum temperature before breaking the loop
+    mintemp = 10000
+    
+    #Initialize some variables for looping
+    failcount = 0
+    
+    dz = -np.abs(dzbase)
+    i = 0
     
     #Calculate column structure
-    #1st order Eulerian solver
+    #1st order Eulerian solver CURRENTLY DEFUNCT!!!!
     if solver == 'euler':
         for i in np.arange(Ncells-1):
             
@@ -197,9 +292,12 @@ def postshock_structure(Flog, M, R, Ri = 5, Ncells = 10000, zrange = 1/1e5, solv
             a2[i+1] = a2[i] + dz * DA2DZ
             nh[i+1] = np.abs(Kappa/(v[i+1]*mu*mh))
     
+    #Dummy value for the sound speed.
+    a2out = 1e20
+    
     #4th order Runge-Kutta solver
     if solver == 'RK':
-        for i in np.arange(Ncells-1):
+        while i < Ncells:
             #Step 1: At t = tn, y = yn
             n1 = nh[i]
             v1 = v[i]
@@ -233,7 +331,7 @@ def postshock_structure(Flog, M, R, Ri = 5, Ncells = 10000, zrange = 1/1e5, solv
                 L3 = Lamfunc(np.log10(nh3), np.log10(mh*mu/k*a2_3))[0]
             else:
                 L3 = Lamfunc(np.log10((mh*mu/k)*a2_3)) * nh3**2
-                
+            
             k3 = prepost.dvdz(L3, Kappa, g, v3, a2_3) 
             j3 = prepost.da2dz(L3, Kappa, g, v3, k3)
             v4 = v1+(k3*dz)
@@ -250,13 +348,51 @@ def postshock_structure(Flog, M, R, Ri = 5, Ncells = 10000, zrange = 1/1e5, solv
             j4 = prepost.da2dz(L4, Kappa, g, v4, k4)
             
             #Update velocities
-            v[i+1] = v[i] + dz*(k1 + 2*k2 + 2*k3 + k4)/6
-            a2[i+1] = a2[i] + dz*(j1 + 2*j2 + 2*j3 + j4)/6
-            nh[i+1] = np.abs(Kappa/(v[i+1]*mu*mh))
+            # v[i+1] = v[i] + dz*(k1 + 2*k2 + 2*k3 + k4)/6
+            # a2[i+1] = a2[i] + dz*(j1 + 2*j2 + 2*j3 + j4)/6
+            # nh[i+1] = np.abs(Kappa/(v[i+1]*mu*mh))
             
+            vout = v[i] + dz*(k1 + 2*k2 + 2*k3 + k4)/6
+            a2out = a2[i] + dz*(j1 + 2*j2 + 2*j3 + j4)/6
+            #nhout = np.abs(Kappa/(v[i+1]*mu*mh))
+            nhout = np.abs(Kappa/(vout*mu*mh))
+            
+            if i == Ncells-1:
+                raise ValueError('Maximum number of cells reached before reaching end of postshock region!')
+            
+            if ((vout - v[i])/v[i] > thresh) or ((vout - v[i])/v[i] > thresh) or ((nhout - nh[i])/nh[i] > thresh) or (np.sum(np.isfinite([vout, a2out, nhout])) !=3) or a2out < 0:
+                dz = dz/2 
+#                print(i)
+#                print(mu*mh/k * a2[i])
+                failcount = failcount + 1
+                
+                if failcount > 100:
+                    print('CODE FAILED, TEMPERATURE VALUES LIKELY OUTSIDE COOLING GRID VALUES! RETURNING...')
+                    return
+                
+            else:
+                v.append(vout)
+                a2.append(a2out)
+                nh.append(nhout)
+                z.append(z[i]+dz)
+                
+                failcount = 0
+                i = i+1
+                dz = dz*2
+                
+                
+                if mu*mh/k * a2out < mintemp:
+                    break
+    
+    z = np.array(z)
+    v = np.array(v)
+    a2 = np.array(a2)
+    nh = np.array(nh)
+    
     T = mu*mh/k * a2
     
     return np.array([z, v, nh, T])
+    
     
 
 def make_coolingfile(colfiles):
@@ -445,7 +581,7 @@ def collect_models(basepath = '/Users/Connor/Desktop/Research/shock/code/cloudy_
     return col
     
     
-def make_flux(npoints, model, cooltag, specpath, spectag,\
+def make_postshockflux(model, cooltag, specpath, spectag,\
             ctfile = '/Users/Connor/Desktop/Research/shock/code/cloudy_code/coolinggrid.txt',\
             basepath = '/Users/Connor/Desktop/Research/shock/code/cloudy_code/models/'):
     '''
@@ -466,10 +602,10 @@ def make_flux(npoints, model, cooltag, specpath, spectag,\
         ctfile:[string] File containing information about available T and rho pairs. Made by postshock.make_coolingfile
     
     OUTPUTS:
-        The total spectrum produced by the post-shock region
+        The total spectrum produced by the post-shock region, and a file containing the spectra + wl
     
     NOTES:
-        !!!!! Need to think about directionality? !!!!
+        The spectrum that is written out does not contain bins with zero flux while the returned spectra does.
     
     '''
     
@@ -482,41 +618,37 @@ def make_flux(npoints, model, cooltag, specpath, spectag,\
     gridT = alldata[1:,0]
     gridnh = alldata[0,1:]
     
-    #Make a cut on what is no longer postshock. Based on the derivative of the temperature structure
-    Tgrad_cut = 0.1 #K/cm
-    
     #If there are nans, look at the structure that is not nan
     if np.sum(~np.isfinite(model[3,:])) != 0:
         cut = np.where(~np.isfinite(model[3,:]))[0][0]-1
-        print('Careful! NaNs detected')
+        print('Warning in prepost.make_flux: Careful! NaNs detected')
     
-    else:
-        try:
-            cut = np.where(np.diff(model[3,:])/np.diff(model[0,:]) < Tgrad_cut)[0][0]
-        except IndexError:
-            print('Model did not reach minimum temperature gradient cut. Try Re-running model with larger zrange? Returning...')
-            return -1
+    Z = model[0,:]
+    NH = model[2,:]
+    T = model[3,:]
     
-    #Interpolate over model
-    Tfunc = interpolate.interp1d(model[0,:cut], model[3,:cut], kind = 'cubic', fill_value = 'extrapolate')
-    nhfunc = interpolate.interp1d(model[0,:cut], model[2,:cut], kind = 'cubic', fill_value = 'extrapolate')
-    
-    Z = np.linspace(model[0,0], model[0,cut], npoints)
-    T = Tfunc(Z)
-    NH = nhfunc(Z)
-    
-    dz = -np.diff(Z)[0]
+    print('Number of valid cells: '+str(len(Z)))
     
     #For each point in model, find the closest model I have, and make a stack of spectra
     sstack = []
     for i, z in enumerate(Z):
+        
+        #Useful things for testing.
+        #print(str(i+1) + '/'+str(len(Z)))
+        #print(str(i)  +': '+ str((10**Tval - T[i])/T[i]))
+
+        if i !=0:
+            dz = np.abs(Z[i]-Z[i-1])
+        else:
+            dz = np.abs(Z[i+1]-Z[i])
+        
+        
         Tval = gridT[np.argmin(np.abs(np.log10(T[i]) - gridT))]
         nhval = gridnh[np.argmin(np.abs(np.log10(NH[i]) - gridnh))]
         
         Tname = "{0:.2f}".format(Tval)
         nhname = "{0:.2f}".format(nhval)
         
-        print(str(i)  +': '+ str((10**Tval - T[i])/T[i]))
         
         #Load in the spectra, get the wavelength and total emission.
         full = np.genfromtxt(basepath+'n_'+nhname[:-1]+'/'+cooltag+'__T'+Tname+'__n'+nhname+'.con', usecols = [0,6])
@@ -535,24 +667,26 @@ def make_flux(npoints, model, cooltag, specpath, spectag,\
     #Get the wavelength information from the final column
     sstack = np.array(sstack)
     
-    #Sum each block, divide by 2 to show flux going up and down evenly
+    #Sum each block. Divide by 2, since I am taking column 7 which is the total emission emitted by each cell
     #Units from Cloudy are erg cm^-2 s^-1. Since working with 1cm x 1cm column, this is fine.
     spectra_all = np.sum(sstack, axis = 0)/2
     
     #Remove the places where the flux is 0.
     non_zero = spectra_all != 0
     spectra = spectra_all[non_zero]
-    wl = wl[non_zero]
+    
+    wlnz = wl[non_zero]
     
     sfile = open(specpath+spectag+'.sed', 'w')
-    sfile.write("{0:.6e}".format(wl[0]) +'\t'+ "{0:.6e}".format(spectra[0]) + '\t'+'units microns\n')
+    sfile.write("{0:.6e}".format(wlnz[0]) +'\t'+ "{0:.6e}".format(spectra[0]) + '\t'+'units microns\n')
     
     for i in np.arange(len(spectra[1:]))+1:
-        sfile.write("{0:.6e}".format(wl[i]) +'\t'+ "{0:.6e}".format(spectra[i])+'\n')
+        sfile.write("{0:.6e}".format(wlnz[i]) +'\t'+ "{0:.6e}".format(spectra[i])+'\n')
     
     sfile.close()
     
-    return np.transpose(np.vstack([wl, spectra]))
+    return np.transpose(np.vstack([wl, spectra_all]))
+    
 
 def preshock_structure(Flog, M, R, Ri = 5):
     '''
@@ -601,7 +735,7 @@ def preshock_structure(Flog, M, R, Ri = 5):
     
     return nh_preshock
 
-def make_preshockmodel(nh, Flog, tag, path):
+def make_preshockmodel(postshock_spectra, M, R, Flog, tag, path, Rstop = 0.1, Ri = 5):
     '''
     prepost.make_preshockmodel():
 
@@ -609,16 +743,30 @@ def make_preshockmodel(nh, Flog, tag, path):
         Makes cloudy input files for the pre-shock region
 
     INPUTS:
-        M:[float] Stellar mass in solar units
-        R:[float] Stellar radii in solar units
         nh:[float] Number density  of the gas !!!!! IN LOG10 UNITS !!!!!
         Flog:[float] Energy flux into the star per cm^2 (rho * u^3)
         tag:[string] Name associated with the file
         path:[string] Location of spectra file, and where the cloudy input file will be created. This is the same place by necessity.
-
+        R:[float] Stellar radii in solar units
+        Lpost:[float] Intensity integrated over frequency. With perfect ODE solutions, this should be F/2
+        
+    OPTIONAL INPUTS:
+        Rstop:[float] Height above shock to stop running code if 4000k is not reached first.
+    
+    
     AUTHOR:
         Connor Robinson, Aug 29th, 2017
     '''
+    
+    #Integrate the postshock spectra
+    Lpost = np.abs(integrate.trapz(postshock_spectra[:,1]/postshock_spectra[:,0], postshock_spectra[:,0]))
+    
+    #Calculate the preshock density
+    nh = prepost.preshock_structure(Flog, M, R, Ri = Ri)
+    
+    Rsun = 6.96e10 #cm
+    
+    Rstop = 0.1
     
     nhname = "{0:.2f}".format(nh)
     Flogname = "{0:.2f}".format(Flog)
@@ -626,10 +774,21 @@ def make_preshockmodel(nh, Flog, tag, path):
     #Load in the spectral file and integrate between two wavelengths to get the intensity
     spectra = np.genfromtxt(path+tag+'.sed', usecols = [0,1])
     
-    scale_wl = 0.001 #microns
-    scale_ind = np.argmin(np.abs(scale_wl-spectra[:,0]))
-    scale_wl_model = spectra[scale_ind,0]
-    scale_flux = spectra[scale_ind,1]
+    c = 3e14 #microns
+    
+    nu = c/spectra[:,0]
+    Fnu = spectra[:,1]/nu
+    Lum = integrate.trapz(Fnu, nu)
+    
+    
+    # scale_wl = 0.001 #microns
+    # scale_ind = np.argmin(np.abs(scale_wl-spectra[:,0]))
+    # scale_wl_model = spectra[scale_ind,0]
+    # scale_flux = spectra[scale_ind,1]
+    
+    #Scale the incident flux by the emission from the postshock
+    scale = np.log10(Lpost)
+    
     
     name = tag+'.in'
     newfile = open(path+name, 'w')
@@ -643,10 +802,12 @@ def make_preshockmodel(nh, Flog, tag, path):
     #Define the shape of the incident radiation
     lines.append('table SED "'+tag+'.sed" \n')
     #Scale the incident radiation
-    #lines.append('intensity '+"{0:.3f}".format(range_sum) +', range' + "{0:.3f}".format(range[0]) + ' to ' + "{0:.3f}".format(range[1]) + 'microns \n'
-    lines.append('nuf(nu) = '+"{0:.4f}".format(np.log10(scale_flux)) + ' at '+"{0:.7f}".format(scale_wl_model) +' microns')
+    lines.append('Intensity '+"{0:.5}".format(scale)+'\n')
+    #lines.append('nuf(nu) = '+"{0:.4f}".format(np.log10(scale_flux)) + ' at '+"{0:.7f}".format(scale_wl_model) +' microns')
     #Set the stop criterion at 4000K
     lines.append('stop temperature 4e3 K \n')
+    #Set an additional stop command. Stop the code at 10% of the stellar radii if it hasn't reached 4000K yet.
+    lines.append('stop depth '+str(np.log10(Rsun*R*Rstop)))
     #Cosmic rays. Would expect them to be quite a bit weaker than ISM?
     lines.append('cosmic ray background -4 \n')
     #Save the continuum
@@ -659,30 +820,50 @@ def make_preshockmodel(nh, Flog, tag, path):
     
     return name
 
-def write_output(nu, preshock_in, preshock_out, posthsock, M, R, Flog, outpath = ''):
+def write_output(nu, postshock, preshock_in, preshock_out, name, fill = 3, outpath = ''):
     '''
-    
     prepost.write_output
     
     PURPOSE:
         Write the final output to be used in columna15
     
     INPUTS:
-        nu:[array] Frequency values
-        preshock_in:[array] Inward flux from pre-shock region.
+        nu:[array] Frequency values in hz
+        postshock:[array] Emission from postshock region. Should be half of the total emission from this region. 
+        preshock_in:[array] Inward flux from pre-shock region
         preshock_out:[array] Outward flux from pre-shock region
-        postshock:[array] Emission from postshock region (Only need one since assumed that half emission up, half down).
-        M:[float] Mass of the star in solar units
-        R:[float] Radius of the star in solar units
-        Flog:[float] Log of the energy flux into the star per unit area in cgs units.
-    
+        name:[string] Name of the object
     
     OPTIONAL INPUTS:
-        outpath:[string] Output location for the file.
+        fill:[int] Amount of zero padding, default is 3
+        outpath:[string] Output location for the file
+    
+    OUTPUTS:
+        fort40 file containing the following columns: nu, postshock, preshock_in, preshock_out
     
     NOTES:
-        Currently unclear what the units for the spectra should be in. 
+        Input Units: ergs cm^-2 s^-1 Hz^-1
+        However, output from cloudy: ergs cm^-2 s^-1 (Shouldn't need to multiply by any constants)
+    
+    AUTHOR:
+        Connor Robinson, September 14th, 2017
     '''
+    
+    
+    # Format for the name: fort40.name
+    name = 'fort40.'+name
+    
+    # Format for writing out: nu, postshock, preshock-in, preshock-out, no header
+    data = np.transpose(np.vstack([nu, postshock, preshock_in, preshock_out]))
+    
+    # Only keep nonzero fluxes
+    good = (data[:,1] > 0) * (data[:,2] >0) * (data[:,3] > 0)
+    
+    np.savetxt(outpath+name, data[good], fmt='%.4e')
+    
+    
+    
+    
     
     
     
