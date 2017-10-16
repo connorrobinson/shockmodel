@@ -4,34 +4,41 @@
 #and shock parameters (energy flux and filling factor)
 #-----------------------------------------------------------------
 
-#give a name to your run (for labels in output files):
-set NAME='test1'
+# give a name to your run (for labels in output files):
+set NAME='gmaur001'
 
-#DISTANCE    in pc
+# DISTANCE    in pc
 set DISTANCE='140.0'
 
-#mass and radius in solar units
-set MASS='0.8' 
-set RADIO='2.1'  
-set TSTAR='4060'
+# mass and radius in solar units
+set MASS='1.1' 
+set RADIO='1.7'  
+set TSTAR='4350'
  
-#BIGF        Energy flux
-set BIGF='1E+12'
-#FILLING     filling factor
+# BIGF        Energy flux
+set BIGF='1E+10'
+# FILLING     filling factor
 set FILLING='0.01'
 
-#Add in a variable for the veiling. Note that this doesn't actually do anything in the code
+# Add in a variable for the veiling. Note that this doesn't actually do anything in the code
 #but it does allow collate/shock_create to latch on to it. 
 set VEILING='0.2'
 
-#directory where program is are kept:
-set DIRPROG=/project/bu-disks/shared/shockmodels/PROGRAMS
-#directory where data files are kept:
-set DIRDAT=/project/bu-disks/shared/shockmodels/DATAFILES
+# directory where program is are kept:
+set DIRPROG=/Users/Connor/Desktop/Research/shock/shockmodel/PROGRAMS
+# directory where data files are kept:
+set DIRDAT=/Users/Connor/Desktop/Research/shock/shockmodel/DATAFILES
 
-#file with wtts fluxes
-#flux at stellar radius in erg/cm2/s/A
-set filewtts=hbc427_longspect.dat
+# file with wtts fluxes
+# flux at stellar radius in erg/cm2/s/A
+set filewtts=gmaur_hbc427_001.dat
+
+#Set files for cloudy                                                                                                                       
+set BASEPATH='/Users/Connor/Desktop/Research/shock/code/cloudy_code/models/'
+set CTFILE='/Users/Connor/Desktop/Research/shock/code/cloudy_code/coolinggrid.txt'
+set COOLTAG='cooling'
+set CLOUDY='/Users/Connor/Desktop/Research/cloudy/c17.00/source/cloudy.exe'
+set OPCFILE='/Users/Connor/Desktop/Research/shock/code/cloudy_code/opacitygrid.txt'
 
 #end of data input
 #---------------------------------------------------------------
@@ -49,26 +56,30 @@ set filecof1=$DIRDAT/cof1.dat
 set filecow2=$DIRDAT/cow2.dat
 set filecof2=$DIRDAT/cof2.dat
 
-
 #=============================================================================
 #
-#OBTAIN SHOCK AND PRE-SHOCK FLUXES FOR INPUT TO COLUMNA: interpolaenf
-#Interpolates in Gullbring's shock models for given M/R
-set interpolaenf=$DIRPROG/interpolaenf_v2
+# #OBTAIN SHOCK AND PRE-SHOCK FLUXES FOR INPUT TO COLUMNA: interpolaenf
+# #Interpolates in Gullbring's shock models for given M/R
+# set interpolaenf=$DIRPROG/interpolaenf_v2
+#
+# ##Output from interpolaf
+# #shockfile with shock and pre-shock spectra
+# #input to COLUMNA
+#
+# ##interpolates in F for given M/R
+# $interpolaenf << EOD
+# $DIRDAT/shock.
+# $BIGF
+# $MASS
+# $RADIO
+# $NAME
+# EOD
 
-##Output from interpolaf
-#shockfile with shock and pre-shock spectra
-#input to COLUMNA
- 
-##interpolates in F for given M/R
-$interpolaenf << EOD
-$DIRDAT/shock.
-$BIGF
-$MASS
-$RADIO
-$NAME
-EOD
+#Call python + cloudy to calculate the preshock and postshock structure
+python -c "import prepost; prepost.wrapper($MASS, $RADIO, '$BIGF', '$NAME', '$CTFILE', '$OPCFILE', '$BASEPATH', '$COOLTAG', '$CLOUDY')" 
 
+#Set the structure file
+set filestructure=$NAME'_struct.dat'
 
 #----------------------------------------------------------------------------
 #HEATED PHOTOSPHERE CALCULATION: COLUMNA
@@ -77,7 +88,6 @@ set COLUMNA=$DIRPROG/columna15
 ##Input data for COLUMNA:
 #NLTE=0       =1 calculate NLTE H populations, not yet implemented, leave at 0
 set NLTE='0'
-
 
 ##Output from COLUMNA:
 #fort.30
@@ -106,6 +116,7 @@ $filecof1
 $filecow2
 $filecof2
 fort40.$NAME
+$filestructure
 $filewtts
 EOD
  

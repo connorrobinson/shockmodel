@@ -11,6 +11,7 @@ import emcee
 import corner
 import pandas as pd
 from astropy.io import fits
+from scipy import optimize
 
 ''''
 shock.py
@@ -33,16 +34,15 @@ FUNCTIONS:
         Performs chi-squared minimization to get optimum model parameters
     
     
-NOTE: Requires EDGE. You can get the latest version at https://github.com/danfeldman90/EDGE
+NOTE: Requires EDGE. You can get the latest version at https://github.com/cespaillat/EDGE
     
 '''
 
-def scale(targ, wtarg, datatag, veiling, Rctts, dctts, jobnum, photometry = 0,\
-     wttspath = '/Users/Connor/Desktop/Research/shock/data/wtts/',\
-     cttspath = '/Users/Connor/Desktop/Research/shock/data/ctts/',\
+def scale(ctts, wtts, datatag, veiling, Rctts, dctts, jobnum, photometry = 0,\
      plotpath = '/Users/Connor/Desktop/Research/shock/plotting/scaled/',\
      outpath  = '/Users/Connor/Desktop/Research/shock/data/wtts/scaled/',\
-     wttstag = 'HST', clob = 0, verbose = 1, plot = True, nzeros = 3):
+     wttstag = 'HST', clob = 0, verbose = 1, plot = True, nzeros = 3, wtts_scalephot = False,\
+     ctts_scalephot = False):
     '''
      shock.scale
      
@@ -59,8 +59,6 @@ def scale(targ, wtarg, datatag, veiling, Rctts, dctts, jobnum, photometry = 0,\
      
      OPTIONAL INPUTS:
          photometry: [boolean] If True, will include photometry in the output file. Only want this for plotting purposes
-         wttspath: [str] path to wtts data
-         cttspath: [str] path to ctts data
          plotpath: [str] path for plots to end up at
          outpath: [str] path for the scaled spectrum to go
          clob:[boolean] if true, will overwrite previous file
@@ -68,6 +66,9 @@ def scale(targ, wtarg, datatag, veiling, Rctts, dctts, jobnum, photometry = 0,\
          plot: [boolean] if true, will make a plot of the scaled photosphere
     
     '''
+    targ = ctts.name
+    wtarg = wtts.name
+    
     #Define some constants
     pc = 3.09e16 #m
     Rsun = 6.96e8 #m
@@ -75,10 +76,6 @@ def scale(targ, wtarg, datatag, veiling, Rctts, dctts, jobnum, photometry = 0,\
     #Fix the job number
     
     jobn = str(jobnum).zfill(nzeros)
-    
-    #Load in pickles
-    wtts = edge.loadPickle(wtarg, picklepath = wttspath)
-    ctts = edge.loadPickle(targ,  picklepath = cttspath)
     
     #Find the v band magnitude for the CTTS
     Vwl = 0.554 #V band wavelength in microns
@@ -94,10 +91,20 @@ def scale(targ, wtarg, datatag, veiling, Rctts, dctts, jobnum, photometry = 0,\
     Vflux = np.median(ctts.spectra[datatag]['lFl'][close])
     
     #Repeat for the WTTS
-    wclose = np.abs(wtts.spectra[wttstag]['wl'] - Vwl) < maxdiff
-    if np.sum(wclose) == 0:
-        raise ValueError('shock.scale ERROR: NO VALID WTTS SPECTRA FOUND FOR SCALING. WAVELENGTH MUST BE WITHIN 10nm OF 554nm')
-    wVflux = np.median(wtts.spectra[wttstag]['lFl'][wclose])
+    
+    if wtts_scalephot:
+        allwl = np.hstack([wtts.photometry[x]['wl'] for x in wtts.photometry.keys()])
+        allflux = np.hstack([wtts.photometry[x]['lFl'] for x in wtts.photometry.keys()])
+        wclose = np.abs(allwl - Vwl) < maxdiff
+        if np.sum(wclose) == 0:
+            raise ValueError('shock.scale ERROR: NO VALID WTTS PHOTOMETRY FOUND FOR SCALING. WAVELENGTH MUST BE WITHIN 10nm OF 554nm')
+        wVflux = np.median(allflux[wclose])
+        
+    else:
+        wclose = np.abs(wtts.spectra[wttstag]['wl'] - Vwl) < maxdiff
+        if np.sum(wclose) == 0:
+            raise ValueError('shock.scale ERROR: NO VALID WTTS SPECTRA FOUND FOR SCALING. WAVELENGTH MUST BE WITHIN 10nm OF 554nm')
+        wVflux = np.median(wtts.spectra[wttstag]['lFl'][wclose])
     
     #Flatten the photometry into a single array
     #Start with the CTTS
@@ -135,7 +142,7 @@ def scale(targ, wtarg, datatag, veiling, Rctts, dctts, jobnum, photometry = 0,\
     #Make another pickle with the scaled spectra
     wtts_scaled = edge.TTS_Obs(targ+'_'+wtarg+'_'+jobn)
     wtts_scaled.add_spectra(wttstag, wtts.spectra[wttstag]['wl'], spectra)
-    wtts_scaled.add_photometry('scaled', wphotwl, photflux)
+    wtts_scaled.add_photometry('scaled', wphotwl, photflux, verbose = False)
     
     #Write a new pickle file
     wtts_scaled.SPPickle(outpath, clob = clob)
@@ -152,10 +159,15 @@ def scale(targ, wtarg, datatag, veiling, Rctts, dctts, jobnum, photometry = 0,\
         plt.show()
         
     
-def create(path, table, names, NAME, wttsfile, samplepath = '', nzeros=3, \
+def create(path, row, names, NAME, wttsfile, samplepath = '', nzeros=3, \
     DIRPROG = '/project/bu-disks/shared/shockmodels/PROGRAMS',\
     DIRDAT = '/project/bu-disks/shared/shockmodels/DATAFILES',\
-    outpath = ''):
+    outpath = '',\
+    BASEPATH ='/project/bu-disks/shared/SHOCK/PREPOST/models/',\
+    CTFILE ='/project/bu-disks/shared/SHOCK/PREPOST/models/coolinggrid.txt',\
+    COOLTAG ='cooling',\
+    CLOUDY ='/projectnb/bu-disks/connorr/cloudy/c17.00/source/cloudy.exe',\
+    OPCFILE ='/project/bu-disks/shared/SHOCK/PREPOST/models/opacitygrid.txt'):
     
     '''
     shock.create
@@ -165,7 +177,7 @@ def create(path, table, names, NAME, wttsfile, samplepath = '', nzeros=3, \
     
     INPUTS:
         path: location of the job parameter list
-        table: A row from the table containing all of the parameters
+        row: A row from the table containing all of the parameters
         names: The first row in the table containing all of the parameters names.
         NAME: name associated with the model
     
@@ -175,7 +187,11 @@ def create(path, table, names, NAME, wttsfile, samplepath = '', nzeros=3, \
         nzeros: [Int] Zero padding in the job number, default is 3
         DIRPORG/DIRDAT: [String] Paths to where the shockmodels themselves live
         outpath: [String] Path to where the files will be written. Default is the current directory.
-        
+        BASEPATH: [String] Path to the top level directory containing the cloudy models
+        CTFILE: [String] File containing the cooling table
+        COOLTAG: [String] Name associated with files in the cooling table
+        CLOUDY: [String] Path + name of the cloudy executable file
+        OPCFILE:[String] File containing the opacity information
     
     OUTPUTS:
         Batch file containing the necessary code to the run the model
@@ -204,9 +220,9 @@ def create(path, table, names, NAME, wttsfile, samplepath = '', nzeros=3, \
             end = start + len(text[start:].split("'")[0])
             
             if param == 'BIGF':
-                text = text[:start] + table[i][1:-1] + text[end:]
+                text = text[:start] + row[i][1:-1] + text[end:]
             else:
-                text = text[:start] + str(table[i]) + text[end:]
+                text = text[:start] + str(row[i]) + text[end:]
         
     
     #Replace the WTTS file
@@ -217,7 +233,7 @@ def create(path, table, names, NAME, wttsfile, samplepath = '', nzeros=3, \
     #Set the name of the file
     start = text.find("NAME='")+len("NAME='")
     end = start + len(text[start:].split("'")[0])
-    text = text[:start] + NAME+str(table[0]).zfill(nzeros) + text[end:]
+    text = text[:start] + NAME+str(row[0]).zfill(nzeros) + text[end:]
     
     #Set the paths
     start = text.find('DIRPROG=')+len('DIRPROG=')
@@ -228,11 +244,32 @@ def create(path, table, names, NAME, wttsfile, samplepath = '', nzeros=3, \
     end = start + len(text[start:].split('\n')[0])
     text = text[:start] + DIRDAT + text[end:]
     
+    #Set up the cloudy stuff
+    start = text.find('set BASEPATH=')+len('set BASEPATH=')
+    end = start + len(text[start:].split('\n')[0])
+    text = text[:start]+ "'" + BASEPATH + "'"+ text[end:]
+    
+    start = text.find('set CTFILE=')+len('set CTFILE=')
+    end = start + len(text[start:].split('\n')[0])
+    text = text[:start]+ "'" + CTFILE + "'" + text[end:]
+    
+    start = text.find('set COOLTAG=')+len('set COOLTAG=')
+    end = start + len(text[start:].split('\n')[0])
+    text = text[:start]+ "'" + COOLTAG + "'" + text[end:]
+    
+    start = text.find('set CLOUDY=')+len('set CLOUDY=')
+    end = start + len(text[start:].split('\n')[0])
+    text = text[:start] + "'" + CLOUDY + "'" + text[end:]
+    
+    start = text.find('set OPCFILE=')+len('set OPCFILE=')
+    end = start + len(text[start:].split('\n')[0])
+    text = text[:start] + "'" + OPCFILE + "'" + text[end:]
+    
     #Turn the text back into something that can be written out
     outtext = [s + '\n' for s in text.split('\n')]
     
     #Write out the job file
-    newjob = open(outpath+'job'+str(table[0]).zfill(nzeros), 'w')
+    newjob = open(outpath+'job'+str(row[0]).zfill(nzeros), 'w')
     newjob.writelines(outtext)
     newjob.close()
     
@@ -288,9 +325,7 @@ def create_runall(jobstart, jobend, clusterpath, outpath = '', samplepath = '', 
     
 
 
-def modelplot(F,jobnums, f, targ, wtarg, datatag,\
-    wttspath = '/Users/Connor/Desktop/Research/shock/data/wtts/scaled/',\
-    cttspath = '/Users/Connor/Desktop/Research/shock/data/ctts/',\
+def modelplot(F,jobnums, f, ctts, wtts, datatag,\
     modelpath ='/Users/Connor/Desktop/Research/shock/models/',\
     plotpath = '/Users/Connor/Desktop/Research/shock/plotting/modelplots/',\
     mask = False, maskfile = '/Users/Connor/Desktop/Research/shock/code/mask.dat',\
@@ -306,15 +341,13 @@ def modelplot(F,jobnums, f, targ, wtarg, datatag,\
     
     INPUTS:
         F: [list of strings] Energy flux. Should be an array in the form: ['1E+11','1E+12']
-        jobnum: [list of ints] Job numbers associated with each F (in order)
+        jobnums: [list of ints] Job numbers associated with each F (in order)
+        ctts:[EDGE observation object] Observation object for the CTTS
+        wtts:[EDGE observation object] Observation object for the WTTS
         f: [list of floats] Filling factor. Should be an array in the form: [0.02,  0.001]
-        targ: [str] Name of the ctts (the one used in all the filenames ect)
-        wtarg: [str] Name of the ctts
         datatag: [str] Tag associated with the spectrum for the ctts, e.g. 'HSTv1'
     
     OPTIONAL INPUTS:
-        wttspath: [String] path to wtts data. 
-        cttspath: [String]path to ctts data
         modelpath: [String] path to models
         plotpath: [String] path for created plot
         mask: [Boolean] If True, will overplot the mask in grey
@@ -322,16 +355,19 @@ def modelplot(F,jobnums, f, targ, wtarg, datatag,\
         plottarg: [str] Name of the ctts that will be used for plotting  (e.g. plottarg = 'GM Auriga' while targ = 'gmaur')
         chi2: [Float] If set to anything other than -1 will print chi**2 on the plot
         photometry: [Boolean] If True, photometry will be included on plot
-        spectrim: [list of ints] Pairs of wavelengths to trim the observed between. E.g., [[2100, 2300], [4500,4600]]
+        spectrim: [list of ints] Pairs of wavelengths to trim the observed between. E.g., [[2100, 2300], [4500,4600]] in angstroms
         smooth: [Int] Window for smoothing. Automatically set to 1 (no smoothing) (Uses the pandas rolling_mean function)
         loc: ['String'] Sets the location of your legend
-        fontsize:[int]
+        fontsize:[int]:
         
         
     OUTPUTS:
         Shows + makes a plot of the model
     
     '''
+    
+    targ  = ctts.name
+    wtarg = wtts.name
     
     #Fix the modelpath to include the target name if the default path is used
     if modelpath == '/Users/Connor/Desktop/Research/shock/models/':
@@ -342,14 +378,6 @@ def modelplot(F,jobnums, f, targ, wtarg, datatag,\
     else:
         modelname = ['fort40.'+targ+str(job).zfill(nzeros) for job in jobnums]
         
-    #Load in the pickles
-    ctts = edge.loadPickle(targ,  picklepath = cttspath)
-    
-    if len(np.shape(jobnums)) == 0:
-        wtts = edge.loadPickle(targ+'_'+wtarg+'_'+str(jobnums).zfill(nzeros), picklepath = wttspath)
-    else:
-        wtts = edge.loadPickle(targ+'_'+wtarg+'_'+str(jobnums[0]).zfill(nzeros), picklepath = wttspath)
-    
     #Sum up the components
     wl, Fall, Fhp, Fpre, Fphot = modelsum(targ, f, F, jobnums, nzeros = nzeros, modelpath = modelpath)
     
@@ -454,7 +482,7 @@ def modelplot(F,jobnums, f, targ, wtarg, datatag,\
     
     
     
-def chisqr(ctts, F, jobnums, targ, datatag, f = None,
+def chisqr(ctts, F, jobnums, datatag, f = None,
     maskfile = '/Users/Connor/Desktop/Research/shock/code/mask.dat',\
     modelpath ='/Users/Connor/Desktop/Research/shock/models/',\
     part_interp = True, MCMC = False, Nruns = 2500, nzeros = 3, Nthreads = 1):
@@ -470,7 +498,6 @@ def chisqr(ctts, F, jobnums, targ, datatag, f = None,
         ctts: [observation object from EDGE] Contains data for the CTTS 
         wtts: [observation object from EDGE] Contains data for the WTTS
         F: [list of strings] Energy flux. Should be an array in the form: ['1E+11','1E+12']
-        targ: [str] Name of the ctts (the one used in all the filenames ect)
         datatag: [str] Tag associated with the spectrum for the ctts, e.g. 'HSTv1'
     
     OPTIONAL INPUTS:
@@ -492,6 +519,8 @@ def chisqr(ctts, F, jobnums, targ, datatag, f = None,
         Connor Robinson, Jul 27, 2016
     
     '''
+    
+    targ = ctts.name
     
     if f == None:
         f = np.zeros(len(F))
@@ -735,7 +764,6 @@ def MCMCsolve(table, ctts, jobs, burnin = 1000, Nruns = 5000, modelpath = '', nz
     INPUTS:
         table: [astropy.ascii table] Table containing all the model information produced by shock_create
         ctts: [EDGE obs file] Classical T Tauri star
-        wtts: [EDGE obs file] Weak T Tauri star
         jobs: [int arr/list] Array of job numbers for the models that will be used for fitting
     
     OPTIONAL INPUTS:
@@ -757,7 +785,7 @@ def MCMCsolve(table, ctts, jobs, burnin = 1000, Nruns = 5000, modelpath = '', nz
     F = [np.array(table['BIGF'][table['jobnum'] == x])[0][1:-1] for x in jobs]
     
     #Set up the MCMC chain
-    sampler = chisqr(ctts, F, jobs, targ, datatag, MCMC = True, Nruns = Nruns, modelpath = modelpath, nzeros = nzeros, Nthreads = Nthreads)
+    sampler = chisqr(ctts, F, jobs, datatag, MCMC = True, Nruns = Nruns, modelpath = modelpath, nzeros = nzeros, Nthreads = Nthreads)
     return sampler.chain[:, burnin:, :].reshape((-1, len(F)))
 
 def mdot(Mctts, Rctts, F, f, Ri = 5):
@@ -783,6 +811,203 @@ def mdot(Mctts, Rctts, F, f, Ri = 5):
     
     vs = np.sqrt(2*G*(Mctts*Msun)/(Rctts*Rsun)) * np.sqrt(1-1/Ri)
     return 8*np.pi*(Rctts*Rsun)**2/vs**2 * np.sum(np.array([float(x) for x in F]) * f)*(365*24*60*60/Msun)
+
+
+def cumulativeProb(chi2, veils, xlim = [], save = False, name = None):
+    '''
+    
+    cumulativeProb
+    
+    PURPOSE:
+        Given a set of chi2 values + veilings, produces a cumulative probability plot.
+        This plot highlights the most probable value, along with producing percentiles.
+    
+    INPUTS:
+        chi2: [numpy array] chi**2 values for a set of models with EQUALLY spaced values of veiling
+        veils: [numpy array] Associated veiling values for the list of chi**2.
+    
+    OUTPUTS:
+        Array containing statistical information structured as follows:
+        [mp, sigp1, sigm1]
+        
+        mp: index of the most probable value
+        
+        sigp1: index of the lower 16th nd percentil
+    Most probable veiling value
+    
+    
+    '''    
+    
+    if xlim == []:
+        xlim = [0,veils[-1]]
+    
+    prob = np.exp(-np.array(chi2)/2)/np.sum(np.exp(-np.array(chi2)/2))
+    
+    cProb = np.cumsum(prob)
+    
+    sigm1 = np.argmin(np.abs(cProb - (0.16)))
+    sigm2 = np.argmin(np.abs(cProb - (0.025)))
+    
+    midpoint = np.argmin(np.abs(cProb - 0.5))
+    
+    sigp1 = np.argmin(np.abs(cProb - (0.84)))
+    sigp2 = np.argmin(np.abs(cProb - (0.975)))
+    
+    #Set upc colors
+    #High light color (purple)
+    c1 = '#94DB79' 
+    
+    #Greens
+    c2 = '#27577C' 
+    c3 = '#6188A6'
+    c4 = '#96B3CC'
+    
+    #Outline color
+    c5 = '#134461'
+    
+    plt.figure(figsize = [13,7])
+    
+    #Plot the location of the maximum chi2 value
+    probMax = np.argmax(prob)
+    plt.bar(veils[probMax]-(veils[1]-veils[0])/2, cProb[probMax], width = veils[1]-veils[0], facecolor = c1, zorder = 2, edgecolor = c3)
+    
+    #Outline the 50th percentile in white
+    plt.bar(veils[midpoint] - (veils[1]-veils[0])/2, cProb[midpoint], width = veils[1]-veils[0], edgecolor = c5, zorder = 3, facecolor = 'none', lw = 2.0)
+    
+    #Plot the cumulative probability as colored bars
+    plt.bar(veils[0:sigm2]-(veils[1]-veils[0])/2, cProb[0:sigm2], facecolor = c2, alpha = .9, width = veils[1]-veils[0], edgecolor = c2,  zorder = 1)
+    plt.bar(veils[sigm2:sigm1]-(veils[1]-veils[0])/2, cProb[sigm2:sigm1], facecolor = c3, alpha = .9, width = veils[1]-veils[0], edgecolor = c3,  zorder = 1)
+    plt.bar(veils[sigm1:sigp1]-(veils[1]-veils[0])/2, cProb[sigm1:sigp1], facecolor = c4, alpha = .9, width = veils[1]-veils[0], edgecolor = c4,  zorder = 1)
+    plt.bar(veils[sigp1:sigp2]-(veils[1]-veils[0])/2, cProb[sigp1:sigp2], facecolor = c3, alpha = .9, width = veils[1]-veils[0], edgecolor = c3, zorder = 1)
+    plt.bar(veils[sigp2:]-(veils[1]-veils[0])/2, cProb[sigp2:], facecolor = c2, alpha = .9 , width = veils[1]-veils[0], edgecolor = c2, zorder = 1)
+    
+    plt.text(veils[sigm1] + xlim[1]*.05, 0.16+ 0.02, r'$r_v = '+str(veils[sigm1])+r'$', fontsize = 17, color = 'w')
+    plt.text(veils[midpoint] +xlim[1]*.05, .5+ 0.027, r'$r_v = '+str(veils[midpoint])+r'^{+'+str(veils[sigp1]-veils[midpoint])+'}_{-'+str(veils[midpoint]-veils[sigm1])+'}$', fontsize = 30, color = 'w')
+    plt.text(veils[sigp1] +xlim[1]*.05, .84 - 0.05, r'$r_v = '+str(veils[sigp1])+r'$', fontsize = 17, color = 'w')
+    
+    
+    plt.axhline(0.025, ls = '--', color = 'k', alpha = .5, lw = 1)
+    plt.axhline(0.16,  ls = '--', color = 'k', alpha = .5, lw = 2)
+    plt.axhline(0.5,   ls = '--', color = 'k', alpha = .5, lw = 3)
+    plt.axhline(0.84,  ls = '--', color = 'k', alpha = .5, lw = 2)
+    plt.axhline(0.975, ls = '--', color = 'k', alpha = .5, lw = 1)
+    
+    plt.axhline(1.0, color = 'k', alpha = .2, ls = '--', lw = 1)
+    
+    plt.text(xlim[1]*0.9, 0.01+0.025,  r'$2.5\%$',  color = 'w', fontsize = 15)
+    plt.text(xlim[1]*0.9, 0.015+0.16,   r'$16\%$',   color = 'w', fontsize = 17)
+    plt.text(xlim[1]*0.9, 0.015+0.5,    r'$50\%$',   color = 'w', fontsize = 25)
+    plt.text(xlim[1]*0.9, -0.05+0.84,   r'$84\%$',   color = 'w', fontsize = 17) 
+    plt.text(xlim[1]*0.9, -0.04+0.975,  r'$97.5\%$', color = 'w', fontsize = 15) 
+    
+    plt.xlim(xlim)
+    plt.ylim([0, 1.03])
+    
+    plt.xlabel(r'$r_v$', fontsize = 18)
+    plt.ylabel(r'$\int\;P\,(r_v)\,dr_v$', fontsize = 18)
+    
+    
+    if save == True:
+        if name != None:
+            plt.savefig(name)
+        else:
+            print('Warning: Specify a name for saving cumulative probability plot.')
+    plt.show()
+    
+    return [veils[sigm2], veils[sigm1], veils[midpoint], veils[sigp1], veils[sigp2]]
+
+def fit_veil(chi2, veils, ctts, datatag, plotpath = '', normpoints = 10000, normmax = 10):
+    '''
+    fitVeil
+    
+    PURPOSE:
+        Fits for the best value of the veiling using an asymmetric gaussian
+    
+    INPUTS:
+        chi2: [list/numpy array] Chi^2 values from models with different veilings
+        veils: [numpy array] Veilings for the models
+        ctts: [edge TTS_Obs object] Observation object for the target
+        datatag: Tag associated with the data that are being fit
+        
+    OPTIONAL INPUTS:
+        normpoints: [int] Number of points used in the normalization function. Should be fairly large. Default is 10000
+        normmax: [float] Maximum veiling used for normalization integration. Default is 10.
+    
+    OUTPUTS:
+        List containing the asymmetric gaussian fit + the normalization with the following structure:
+        [Amplitude (A), mean (mu), sigmaL, sigmaR, normalization]
+    
+    AUTHOR:
+        Connor Robinson, June 23rd, 2017
+    
+    '''
+    
+    targ = ctts.name
+    
+    ## Calculate the best value of the veiling based on a chi2 minimization
+    #Calculate the probability for each value of veiling
+    prob = np.exp(-np.array(chi2)/2)/np.sum(np.exp(-np.array(chi2)/2))
+    
+    #Fit an antisymmetric gaussian to the probabilities
+    p0 = [0.2, .1, .5, .5]
+    coeff, var_matrix = optimize.curve_fit(gauss, veils, prob, p0=p0)
+    gveils = np.linspace(0,10,10000)
+    fit = gauss(gveils, coeff[0], coeff[1], np.abs(coeff[2]), np.abs(coeff[3]))
+    
+    #Normalize all the distributions
+    normfit = 1/(np.sum(gauss(np.linspace(0,normmax,normpoints), coeff[0], coeff[1], np.abs(coeff[2]), np.abs(coeff[3]))) * normmax/normpoints)
+    
+    #Plot up the probability plot for the veiling
+    plt.scatter(veils, prob * normfit, color = 'k', marker = 'o', s = 40, label = 'Data')
+    
+    #Add shading to show 1, 2 and 3 stdevs
+    plt.plot(gveils, fit * normfit, color = 'k', label = 'Gaussian fit', lw = 2, alpha = .5)
+    colors = ['b', 'g', 'r']
+    stdevs = [0,1,2]
+    
+    #Loop over each stdev
+    for i, stdev in enumerate(stdevs):
+        #Create fill regions for right and left sides of gaussian.
+        xR = [np.argmin(np.abs(gveils - (coeff[1] + np.abs(coeff[3])*stdev) )), np.argmin(np.abs(gveils - (coeff[1] + np.abs(coeff[3])*(1+stdev)) ))]
+        xL =  [np.argmin(np.abs(gveils - (coeff[1] - np.abs(coeff[2])*stdev) )), np.argmin(np.abs(gveils - (coeff[1] - np.abs(coeff[2])*(1+stdev)) ))]
+        
+        plt.fill_between(gveils[xR[0]:xR[1]+1], fit[xR[0]:xR[1]+1]*normfit, color = colors[i], alpha = .2)
+        plt.fill_between(gveils[xL[1]:xL[0]+1], fit[xL[1]:xL[0]+1]*normfit, color  = colors[i], alpha = .2)
+    
+    #Add the best fit veiling value to the plot
+    plt.text(0.7, 0.8, r'$r_v = ' + str(coeff[1])[0:4] + r'^{ +' + str(np.abs(coeff[3]))[0:4]+r'}_{-'+str(np.abs(coeff[2]))[0:4]+r'}$', fontsize = 20)
+    
+    #Finish off the plot (e.g. ranges, saving ect.)
+    plt.ylabel(r'$P\,[r_v]$', fontsize = 17)
+    plt.xlabel(r'$r_v$', fontsize = 17)
+    plt.ylim([0, 1.0])
+    plt.xlim([0, 1.0])
+    plt.savefig(plotpath+targ+'_'+datatag+'_veiling_prob.pdf')
+    plt.show()
+    
+    return np.hstack([coeff,normfit])
+
+def gauss(x, *p):
+    '''
+    gauss()
+    
+    PURPOSE:
+        Returns a gaussian. Used for fitting veiling
+    
+    INPUTS:
+        x: [float] Number/array for the x value
+        p: Amplitude, offset and standard deviation of the gaussian
+    
+    RETURNS:
+        An array containing a gaussian evaluated at each x
+    
+    '''
+    A, mu, sigmaL, sigmaR = p
+    
+    y = np.hstack([A*np.exp(-(x[x<mu]-mu)**2/(2.*sigmaL**2)), A*np.exp(-(x[x>=mu]-mu)**2/(2.*sigmaR**2))])
+    
+    return y
+
 
 #Define a bunch of functions for doing an emcee fit
 def lnlike(f, Fphot, Fhp, Fpre, flux, err):

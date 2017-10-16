@@ -19,7 +19,7 @@ make = True
 
 tag = 'cooling'
 basepath = '/Users/Connor/Desktop/Research/shock/code/cloudy_code/models/'
-T = np.linspace(3.5, 3.6, 2)
+T = np.linspace(3.7, 7, 34)
 #nh = np.linspace(15.2, 16, 9)
 nh = np.linspace(10.0, 17, 71)
 
@@ -72,17 +72,23 @@ for i in np.arange(len(unP)):
     pool.map(prepost.run_model,batch)
 
 #Construct the cooling grid
-grids = ['T3.7-7.0__n10.0-17.0__inmodels.txt', \
-         'T3.5-3.6__n10.0-17.0__inmodel.txt']
+grids = ['T3.7-7.0__n10.0-17.0__inmodels.txt']#, \
+#         'T3.5-3.6__n10.0-17.0__inmodel.txt']
 #grids = ['T3.5-7.0__n14.0-16.0__inmodels.txt',\
 #         'T3.7-7.0__n15.2-16.0__inmodels.txt',\
 #         'T3.5-7.0__n10.0-14.0__inmodels.txt',\
 #         'T3.7-7.0__n16.1-17.0__inmodels.txt']
 
-colfiles = prepost.collect_models(basepath=basepath)
-
+colfiles = prepost.collect_models('col', basepath=basepath)
 colfiles = np.array(colfiles)
 prepost.make_coolingfile(colfiles)
+
+opcfiles = prepost.collect_models('opc', basepath=basepath)
+opcfiles = np.array(opcfiles)
+prepost.make_opacityfile(opcfiles)
+
+
+
  
 
 

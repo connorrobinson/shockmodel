@@ -23,7 +23,7 @@ AUTHOR:
     Connor Robinson August 24th, 2017
 '''
 
-def wrapper(M, R, BIGF, name, ctfile, basepath, cooltag, cloudy, Rstop = 0.1):
+def wrapper(M, R, BIGF, name, ctfile, opcfile, basepath, cooltag, cloudy, Rstop = 0.1):
     
     '''
     prepost.wrapper
@@ -61,7 +61,6 @@ def wrapper(M, R, BIGF, name, ctfile, basepath, cooltag, cloudy, Rstop = 0.1):
     c = 3e14 #microns
     
     Ncells = 20000 # Number of cells for postshock structure calculation
-    npoints = 100 #Number of locations to produce spectra.
     
     #Convert everything to float
     Flog = np.log10(np.float(BIGF))
@@ -75,16 +74,16 @@ def wrapper(M, R, BIGF, name, ctfile, basepath, cooltag, cloudy, Rstop = 0.1):
     print('basepath: '+basepath)
     print('cooltag: '+cooltag)
     
-    #Create the postshock structure
+    print('Creating the postshock structure')
     postshock = prepost.postshock_structure(Flog, M, R, Ncells = Ncells, grid2d = True, logT = True, ctfile = ctfile, dzbase = 1e0)
     
-    #Create the postshock spectra
+    print('Creating the postshock spectra')
     postshock_spectra = prepost.make_postshockflux(postshock, cooltag, '', name, ctfile = ctfile, basepath = basepath)
     
     #Make the Cloudy model for the preshock
     pre_name = prepost.make_preshockmodel(postshock_spectra, M, R, Flog, name, '', Rstop = 0.1, Ri = 5)
     
-    #Call Cloudy
+    print('Calling Cloudy')
     os.system(cloudy + ' -p '+name)
     
     #Load in the results from Cloudy
@@ -92,12 +91,16 @@ def wrapper(M, R, BIGF, name, ctfile, basepath, cooltag, cloudy, Rstop = 0.1):
     
     #Convert into the correct units
     nu = c/data[:,0]
-    postshock = postshock_spectra[:,1]/nu
+    postshock_flux = postshock_spectra[:,1]/nu
     preshock_out = data[:,1]/nu
     preshock_in = data[:,2]/nu
     
     #Write out the fort40 file
-    prepost.write_output(nu, postshock, preshock_in, preshock_out, name, fill = 3, outpath = '')
+    print('Writing out files')
+    prepost.write_output(nu, postshock_flux, preshock_in, preshock_out, name, fill = 3, outpath = '')
+    
+    #Write out the structure
+    prepost.write_structure(postshock, name, fill = 3, outpath = '', opcfile = opcfile)
     
     print('Pre-shock and Post-shock regions finished')
 
@@ -161,8 +164,8 @@ def da2dz(Lambda, Kappa, g, v, dvdz):
     da2dz = (-2/5)*v*dvdz-(2/5)*g-(2/5)*Lambda/Kappa
     return da2dz
 
-def postshock_structure(Flog, M, R, Ri = 5, Ncells = 10000, dzbase = 1e3, solver = 'RK',\
-    ctfile = 'coolinggrid.txt', logT = True, grid2d = True):
+def postshock_structure(Flog, M, R, Ri = 5, Ncells = 10000, dzbase = 1e0, solver = 'RK',\
+    ctfile = 'coolinggrid.txt', logT = True, grid2d = True, mintemp = 15000):
     '''
     prepost.postshock_structure
     
@@ -182,7 +185,8 @@ def postshock_structure(Flog, M, R, Ri = 5, Ncells = 10000, dzbase = 1e3, solver
         ctfile:[str] Name of the volume emissivity file.
         Tlog:[bool] If true, the code will accept the temperature values for the cooling file in log form. 
         grid2d:[bool] If true, will use the grid with both temperatures and densities. If false, directly accepts .col files from cloudy.
-    
+        mintemp:[float]
+        
     OUTPUTS:
         Array containing z, v, nh, and T.
     
@@ -265,9 +269,6 @@ def postshock_structure(Flog, M, R, Ri = 5, Ncells = 10000, dzbase = 1e3, solver
     
     #Set the threshold for how much the solution can change between steps before the cell splits.
     thresh = 0.05
-    
-    #Set the minimum temperature before breaking the loop
-    mintemp = 10000
     
     #Initialize some variables for looping
     failcount = 0
@@ -358,8 +359,9 @@ def postshock_structure(Flog, M, R, Ri = 5, Ncells = 10000, dzbase = 1e3, solver
             nhout = np.abs(Kappa/(vout*mu*mh))
             
             if i == Ncells-1:
-                raise ValueError('Maximum number of cells reached before reaching end of postshock region!')
-            
+                print('Maximum number of cells reached before reaching end of postshock region!')
+                break
+                
             if ((vout - v[i])/v[i] > thresh) or ((vout - v[i])/v[i] > thresh) or ((nhout - nh[i])/nh[i] > thresh) or (np.sum(np.isfinite([vout, a2out, nhout])) !=3) or a2out < 0:
                 dz = dz/2 
 #                print(i)
@@ -480,6 +482,144 @@ def make_coolingfile(colfiles):
     gridfile.close()
     
 
+def make_opacityfile(opcfiles):
+    '''
+    prepost.make_opacityfiles
+    
+    PURPOSE:
+        Reads in opacity data from cloudy models and creates a single file with the Planck mean opacity for each T/rho pair.
+    
+    INPUTS:
+        opcfiles: [list/array] all the .opc files from cloudy
+    OUTPUTS:
+        File with rho, T and Rosseland Mean opacity
+    
+    NOTES:
+        Only works if grid is a rectangle
+        
+        Chose the Planck mean opacity over the RMO since we expect the plasma to be optically thin in this regime.
+    
+    AUTHOR:
+        Connor Robinson, October 3rd, 2017
+    '''
+    
+    #Define constants
+    h = 6.626e-34 #J*s
+    e = 1.6e-19 #C
+    
+    #Initialize arrays
+    outdata = []
+    
+    #Begin looping over each file
+    for f in opcfiles:
+        #Read in opacities
+        data = np.genfromtxt(f, skip_header = 1, usecols = [0,1,2,3,4])
+        
+        #Grab the temperature from the file name
+        T = 10**np.float(f.split('__T')[1].split('__')[0])
+        Tlog = np.float(f.split('__T')[1].split('__')[0])
+        n = np.float(f.split('__n')[1].split('.opc')[0])
+        
+        opc = data[:,1]
+        nu = data[:,0]*e/h
+        
+        #Calculate 
+        PMO = integrate.trapz(opc*Bnu(T,nu))/integrate.trapz(Bnu(T,nu))
+        
+        outdata.append([PMO, n, Tlog])
+        print(f)
+    
+    outdata = np.array(outdata)
+    
+    #Sort data into a grid
+    unT = np.unique(outdata[:,2])
+    unN = np.unique(outdata[:,1])
+    
+    grid = np.zeros([len(unT), len(unN)])
+    
+    for i, x in enumerate(unT):
+        for j, y in enumerate(unN):
+            ind = (outdata[:,2] == x) * (outdata[:,1] == y)
+            if np.sum(ind) == 0:
+                grid[i,j] = np.nan
+            else:
+                grid[i,j] = outdata[np.where(ind)[0][0],0]
+    
+    #Write out grid + temp/density
+    gridfile = open('opacitygrid.txt', 'w')
+    gridfile.write('Grid containing Planck Mean Opacities from Cloudy coronal models. First row is log10(nh), first column is T\n')
+    gridfile.write('#-------------------------------------------------------------------------------------------------------#\n')
+    
+    #Write first row containing density
+    gridfile.write('0, ')
+    line = ''
+    for val in unN:
+        line = line + str(val) +', '
+    line = line[:-2] +'\n'
+    gridfile.write(line)
+    
+    for i, line in enumerate(grid):
+        line = str(unT[i]) +', '
+        for val in grid[i]:
+            line = line +str(val) +', '
+        line = line[:-2] + '\n'
+        
+        gridfile.write(line)
+    gridfile.close()
+    
+
+def Bnu(T,nu):
+    '''
+    prepost.Bnu
+    
+    PURPOSE:
+        Returns the Planck function for a given temperature and frequency range
+    
+    INPUTS:
+        T:[float] Temperature [K]
+        nu:[float/array] Frequncy [Hz]
+    
+    OUTPUTS:
+        The Planck function over frequency.
+    
+    '''
+    
+    h = 6.626e-27
+    c = 2.997e10
+    k = 1.380658e-16
+    
+    Bnu = (2*h*nu**3/c**2) * 1/(np.exp(h*nu/(k*T)) - 1)
+    
+    return Bnu
+    
+
+def dBnudt(T,nu):
+    '''
+    prepost.dBnudT
+    
+    PURPOSE:
+        Returns the temperature derivative of the Planck function over a given frequency range
+    
+    INPUTS:
+        T:[float] Temperature [K]
+        nu:[float/array] Frequency [Hz]
+    
+    OUTPUTS:
+        The temperature derivative of the Planck function
+    
+    AUTHOR:
+        Connor Robinson October 3rd, 2017
+    
+    '''
+    
+    h = 6.626e-27
+    c = 2.997e10
+    k = 1.380658e-16
+    
+    dBnudt = 2*h**2*nu**4/(c**2*k*T**2) * np.exp(h*nu/(k*T))/(np.exp(h*nu/(k*T))-1)**2
+    
+    return dBnudt
+
 def make_coolingmodel(tag,path,T, nh):
     '''
     prepost.make_coolingmodel
@@ -512,6 +652,7 @@ def make_coolingmodel(tag,path,T, nh):
     lines.append('cosmic ray background -4\n')
     lines.append('save continuum units microns ".con" no hast last\n')
     lines.append('save cooling ".col" no hash last\n')
+    lines.append('save total opacity ".opc" no hash last\n')
     lines.append('iterate to convergence')
     
     newfile.writelines(lines)
@@ -549,7 +690,7 @@ def run_model(name):
     #Run cloudy
     os.system('cloudy '+run_name)
     
-def collect_models(basepath = '/Users/Connor/Desktop/Research/shock/code/cloudy_code/models/'):
+def collect_models(suffix, basepath = '/Users/Connor/Desktop/Research/shock/code/cloudy_code/models/'):
     '''
     prepost.collect_models
     
@@ -571,7 +712,7 @@ def collect_models(basepath = '/Users/Connor/Desktop/Research/shock/code/cloudy_
     col = []
     
     for d in directories:
-        files = glob(d+'/'+'*.col')
+        files = glob(d+'/'+'*.'+suffix)
         for f in files:
             if os.stat(f).st_size == 0:
                 print('Empty file: ' + f)
@@ -591,7 +732,6 @@ def make_postshockflux(model, cooltag, specpath, spectag,\
         Calculates and saves the emergent spectrum from the given post-shock structure
     
     INPUTS:
-        npoints:[int]  Number of points to interpolate structure over
         model:[array] Structure array from postshock.structure
         cooltag:[string] Tag associated with the cooling file
         specpath:[string] Path where the spectra will be written. Name is generated automatically
@@ -781,11 +921,6 @@ def make_preshockmodel(postshock_spectra, M, R, Flog, tag, path, Rstop = 0.1, Ri
     Lum = integrate.trapz(Fnu, nu)
     
     
-    # scale_wl = 0.001 #microns
-    # scale_ind = np.argmin(np.abs(scale_wl-spectra[:,0]))
-    # scale_wl_model = spectra[scale_ind,0]
-    # scale_flux = spectra[scale_ind,1]
-    
     #Scale the incident flux by the emission from the postshock
     scale = np.log10(Lpost)
     
@@ -848,10 +983,7 @@ def write_output(nu, postshock, preshock_in, preshock_out, name, fill = 3, outpa
     AUTHOR:
         Connor Robinson, September 14th, 2017
     '''
-    
-    
-    # Format for the name: fort40.name
-    name = 'fort40.'+name
+    outname = 'fort40.'+name
     
     # Format for writing out: nu, postshock, preshock-in, preshock-out, no header
     data = np.transpose(np.vstack([nu, postshock, preshock_in, preshock_out]))
@@ -859,11 +991,134 @@ def write_output(nu, postshock, preshock_in, preshock_out, name, fill = 3, outpa
     # Only keep nonzero fluxes
     good = (data[:,1] > 0) * (data[:,2] >0) * (data[:,3] > 0)
     
-    np.savetxt(outpath+name, data[good], fmt='%.4e')
+    #np.savetxt(outpath+name, data[good], fmt='%.4e')
+
+    f = open(outpath+outname, 'w')
+    f.write(str(len(nu[good]))+'\n')
+    
+    gooddata = data[good]
+    
+    for i in np.arange(len(gooddata)):
+        f.write('{:.7e}'.format(gooddata[i,0])+' '+'{:.7e}'.format(gooddata[i,1])+' '+'{:.7e}'.format(gooddata[i,2])+' '+'{:.7e}'.format(gooddata[i,3])+'\n')
+    f.close()
     
     
+def write_structure(model, name, fill = 3, outpath = '', \
+    opcfile = '/Users/Connor/Desktop/Research/shock/code/cloudy_code/opacitygrid.txt'):
+    '''
+    prepost.write_structure
+    
+    PURPOSE:
+        Create a file containing T,rho ,P, and tau for the postshock region. 
+    
+    INPUTS:
+        model:[float array] Postshock structure generated via prepost.postshock_structure
+        name:[string] Name of the object
+    
+    OPTIONAL INPUTS:
+        fill:[int] Amount of zero padding, default is 3
+        outpath:[string] Output location for the structure file
+        opcfile:[string] File containing opacity values from cloudy
+    
+    NOTES: 
+        Now calculating Planck mean opacities from Cloudy.
+        Any temperatures lower than 3.7 (5000K will not produce good results!)
+        
+        Structure for the input model array: [z, v, nh, T]
+        
+        Output columns are: T, rho, pressure, and tau (tsh ,rhosh ,ps, taos in fortran code)
+        
+        IGNORE THIS! THIS IS NOW DEFUNCT
+        Collects information about opacities from Rosseland Mean Opacity (RMO) files 
+        from http://opacities.osc.edu/rmos.shtml between log(T) of 3.5 to 4.7 for
+        densities of log(rho) of -11 to -9 both in increments of 0.01.
+        You may need to change the skip_header where RMO_data is read in if you are using different opacities.
+        
+        
+    AUTHOR:
+        Connor Robinson, September 28th, 2017
+    '''
+    k = 1.380658e-16
+    mh = 1.67e-24
+    k = 1.38e-16
+    
+    #Define solar abundances for calculating mean molecular weight (mu)
+    X = 0.70
+    Y = 0.28
+    Z = 0.02
+    
+    #Calculate/define mu (mean molecular weight). Currently using pure ionized hydrogen flow.
+    #Fully Ionized
+    #mu = (2*X + (3/4)*Y + (1/2)*Z)**(-1)
+    #Neutral
+    #mu = (X + (1/4)*Y + (1/15.5)*Z)**(-1)
+    #Pure ionized hydrogen
+    mu = 0.5
+    
+    # Read in the opacity file
+#    OPdata = np.genfromtxt(OPtaufile, skip_header = 20)
+    
+    #Read in opacities from Cloudy
+    opcdata = np.genfromtxt(opcfile, skip_header = 2, delimiter = ',')
+    Tvals = opcdata[1:,0]
+    nhvals = opcdata[0,1:]
+    opc = opcdata[1:,1:]
+    
+    tau = []
+#    rk = []
+    for i in np.arange(len(model[0,:])-1):
+        
+        Tmodel = np.log10(model[3,i])
+        nmodel = np.log10(model[2,i])
+        
+        
+        #Find the best fitting temperature and density pair
+        Tmin = Tvals[np.argmin(np.abs(Tmodel - Tvals))]
+        nmin = nhvals[np.argmin(np.abs(nmodel - nhvals))]
+        
+        #Useful things for testing.
+        #print(str(i+1) + '/'+str(len(model[0,:])))
+        #print(str(i)  +' T: '+ str((Tmin - Tmodel)/Tmodel))
+        #print(str(i)  +' n: '+ str((nmin - nmodel)/nmodel))
+        
+        #Grab rho*kappa for the best pair
+        rhokappa = opc[Tvals == Tmin, nhvals == nmin]
+        
+        #Calculate tau. Not sure about the [0] at the end of this.
+        tau.append( (rhokappa*(model[0,i]-model[0,i+1]))[0])
+        
+    #Add an additional cell to the beginning, since one cell is lost when calculating dz analytically
+    #tau = np.array(np.hstack([tau[0], tau]))
+    #rk = np.array(np.hstack([rk[0], rk]))
     
     
+    #TESTING THIS!!!!
+    tau = np.cumsum(tau)
+#    rk = np.cumsum(rk)
+    
+    #Do I need to include ram pressure?
+    # I don't think so, Ptherm + Pram ~ constant, and Pram ~ 0 at the base of the post shock region which is
+    # where I am matching the pressure.
+    Pressure = model[2,:] * k * model[3,:]
+    
+    #Now write out the model
+    #Columns are: tshi,rhoshi,psi,taosi
+    outfile = open(name+'_struct.dat', 'w')
+    for i in np.arange(len(tau)):
+        outfile.write('{:.4e}'.format(model[3,i])+'    '+\
+        '{:.4e}'.format(model[2,i]*mu*mh)+'    '+\
+        '{:.4e}'.format(Pressure[i])+'    '+\
+        '{:.4e}'.format(tau[i]) +'\n')
+        
+        #This switches the order in which the values are printed.
+#        outfile.write('{:.4e}'.format(model[3,len(tau)-i-1])+'    '+\
+#        '{:.4e}'.format(model[2,len(tau)-i-1]*mu*mh)+'    '+\
+#        '{:.4e}'.format(Pressure[len(tau)-i-1])+'    '+\
+#        '{:.4e}'.format(tau[len(tau)-i-1]) +'\n')
+
+        
+    outfile.close()
+
     
     
     
