@@ -74,6 +74,7 @@ def wrapper(M, R, BIGF, name, ctfile, opcfile, basepath, cooltag, cloudy, Rstop 
     print('basepath: '+basepath)
     print('cooltag: '+cooltag)
     
+    
     print('Creating the postshock structure')
     postshock = prepost.postshock_structure(Flog, M, R, Ncells = Ncells, grid2d = True, logT = True, ctfile = ctfile, dzbase = 1e0)
     
@@ -774,21 +775,19 @@ def make_postshockflux(model, cooltag, specpath, spectag,\
     for i, z in enumerate(Z):
         
         #Useful things for testing.
-        #print(str(i+1) + '/'+str(len(Z)))
-        #print(str(i)  +': '+ str((10**Tval - T[i])/T[i]))
-
+#        print(str(i+1) + '/'+str(len(Z)))
+#        print(str(i)  +': '+ str((10**Tval - T[i])/T[i]))
+        
         if i !=0:
             dz = np.abs(Z[i]-Z[i-1])
         else:
             dz = np.abs(Z[i+1]-Z[i])
-        
         
         Tval = gridT[np.argmin(np.abs(np.log10(T[i]) - gridT))]
         nhval = gridnh[np.argmin(np.abs(np.log10(NH[i]) - gridnh))]
         
         Tname = "{0:.2f}".format(Tval)
         nhname = "{0:.2f}".format(nhval)
-        
         
         #Load in the spectra, get the wavelength and total emission.
         full = np.genfromtxt(basepath+'n_'+nhname[:-1]+'/'+cooltag+'__T'+Tname+'__n'+nhname+'.con', usecols = [0,6])
@@ -942,7 +941,7 @@ def make_preshockmodel(postshock_spectra, M, R, Flog, tag, path, Rstop = 0.1, Ri
     #Set the stop criterion at 4000K
     lines.append('stop temperature 4e3 K \n')
     #Set an additional stop command. Stop the code at 10% of the stellar radii if it hasn't reached 4000K yet.
-    lines.append('stop depth '+str(np.log10(Rsun*R*Rstop)))
+    lines.append('stop depth '+str(np.log10(Rsun*R*Rstop))+'\n')
     #Cosmic rays. Would expect them to be quite a bit weaker than ISM?
     lines.append('cosmic ray background -4 \n')
     #Save the continuum
@@ -986,20 +985,22 @@ def write_output(nu, postshock, preshock_in, preshock_out, name, fill = 3, outpa
     outname = 'fort40.'+name
     
     # Format for writing out: nu, postshock, preshock-in, preshock-out, no header
-    data = np.transpose(np.vstack([nu, postshock, preshock_in, preshock_out]))
     
-    # Only keep nonzero fluxes
-    good = (data[:,1] > 0) * (data[:,2] >0) * (data[:,3] > 0)
+    #Replace zeros/negatives with 1e-20
+    postfix = postshock
+    postfix[postshock <= 0] = 1e-20
+    preinfix = preshock_in
+    preinfix[preshock_in <= 0] = 1e-20
+    preoutfix = preshock_out
+    preoutfix[preshock_out <= 0] = 1e-20
     
-    #np.savetxt(outpath+name, data[good], fmt='%.4e')
-
+    data = np.transpose(np.vstack([nu, postfix, preinfix, preoutfix]))
+    
     f = open(outpath+outname, 'w')
-    f.write(str(len(nu[good]))+'\n')
+    f.write(str(len(nu))+'\n')
     
-    gooddata = data[good]
-    
-    for i in np.arange(len(gooddata)):
-        f.write('{:.7e}'.format(gooddata[i,0])+' '+'{:.7e}'.format(gooddata[i,1])+' '+'{:.7e}'.format(gooddata[i,2])+' '+'{:.7e}'.format(gooddata[i,3])+'\n')
+    for i in np.arange(len(data)):
+        f.write('{:.7e}'.format(data[i,0])+' '+'{:.7e}'.format(data[i,1])+' '+'{:.7e}'.format(data[i,2])+' '+'{:.7e}'.format(data[i,3])+'\n')
     f.close()
     
     
@@ -1087,14 +1088,7 @@ def write_structure(model, name, fill = 3, outpath = '', \
         #Calculate tau. Not sure about the [0] at the end of this.
         tau.append( (rhokappa*(model[0,i]-model[0,i+1]))[0])
         
-    #Add an additional cell to the beginning, since one cell is lost when calculating dz analytically
-    #tau = np.array(np.hstack([tau[0], tau]))
-    #rk = np.array(np.hstack([rk[0], rk]))
-    
-    
-    #TESTING THIS!!!!
     tau = np.cumsum(tau)
-#    rk = np.cumsum(rk)
     
     #Do I need to include ram pressure?
     # I don't think so, Ptherm + Pram ~ constant, and Pram ~ 0 at the base of the post shock region which is
