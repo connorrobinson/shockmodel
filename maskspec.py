@@ -20,7 +20,8 @@ datatag = 'HSTv2'
 
 #Define the mask manually by looking at plot. Very similar to Ingleby 2015 excluded regions.
 
-mask = [[6525,6600],\
+mask = [[5700,1e7],\
+        [6525,6600],\
         [4839,4895],\
         [4309,4383],\
         [4070,4120],\
@@ -41,8 +42,8 @@ cttspath = '/Users/Connor/Desktop/Research/shock/data/ctts/'
 wttspath = '/Users/Connor/Desktop/Research/shock/data/wtts/'
 
 #Load the spectra
-ctts = edge.loadPickle(targ,  picklepath = cttspath)
-wtts = edge.loadPickle(wtarg, picklepath = wttspath)
+ctts = edge.loadObs(targ,  datapath = cttspath)
+wtts = edge.loadObs(wtarg, datapath = wttspath)
 
 #Plot the spectra
 plt.figure(figsize = (18,5))
@@ -53,6 +54,7 @@ for region in mask:
     plt.fill_between(region, 0, 1e20, color = 'k', alpha =  .3)
 
 plt.ylim([1e-15, 1e-8])
+plt.xlim([np.min(mask), 7300])
 plt.yscale('log')
 
 plt.show()

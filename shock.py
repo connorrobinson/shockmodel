@@ -38,7 +38,7 @@ NOTE: Requires EDGE. You can get the latest version at https://github.com/cespai
     
 '''
 
-def scale(ctts, wtts, datatag, veiling, Rctts, dctts, jobnum, photometry = 0,\
+def scale(ctts, wtts, visits, veiling, Rctts, dctts, jobnum, photometry = 0,\
      plotpath = '/Users/Connor/Desktop/Research/shock/plotting/scaled/',\
      outpath  = '/Users/Connor/Desktop/Research/shock/data/wtts/scaled/',\
      wttstag = 'HST', clob = 0, verbose = 1, plot = True, nzeros = 3, wtts_scalephot = False,\
@@ -83,15 +83,20 @@ def scale(ctts, wtts, datatag, veiling, Rctts, dctts, jobnum, photometry = 0,\
     
     #Originally taking veiling from photometry. This is not correct, since I am now solving for veiling from the spectra
     #Select a small range of wavelength to median over
-    close = np.abs(ctts.spectra[datatag]['wl'] - Vwl) < maxdiff
-    # Now check if there are valid points for scaling
-    if np.sum(close) == 0:
-        raise ValueError('shock.scale ERROR: NO VALID CTTS SPECTRA FOUND FOR SCALING. WAVELENGTH MUST BE WITHIN 10nm OF 554nm')
-    #Finally take the median flux value
-    Vflux = np.median(ctts.spectra[datatag]['lFl'][close])
+    
+    #Scale to the mean of all the available HST spectra
+    Vflux_all = []
+    for v in visits:
+        close = np.abs(ctts.spectra[v]['wl'] - Vwl) < maxdiff
+        # Now check if there are valid points for scaling
+        if np.sum(close) == 0:
+            raise ValueError('shock.scale ERROR: NO VALID CTTS SPECTRA FOUND FOR SCALING. WAVELENGTH MUST BE WITHIN 10nm OF 554nm')
+        #Finally take the median flux value
+        Vflux_all.append(np.median(ctts.spectra[v]['lFl'][close]))
+    
+    Vflux = np.mean(Vflux_all)
     
     #Repeat for the WTTS
-    
     if wtts_scalephot:
         allwl = np.hstack([wtts.photometry[x]['wl'] for x in wtts.photometry.keys()])
         allflux = np.hstack([wtts.photometry[x]['lFl'] for x in wtts.photometry.keys()])
@@ -145,12 +150,19 @@ def scale(ctts, wtts, datatag, veiling, Rctts, dctts, jobnum, photometry = 0,\
     wtts_scaled.add_photometry('scaled', wphotwl, photflux, verbose = False)
     
     #Write a new pickle file
-    wtts_scaled.SPPickle(outpath, clob = clob)
+    #wtts_scaled.SPPickle(outpath, clob = clob)
+    wtts_scaled.saveObs(datapath = outpath, clob = clob)
+    
+    if len(np.atleast_1d(v)) == 1:
+        v_list = [visits]
+    else:
+        vlist = visits
+    
     
     #Plot up everything to make sure.
     if plot:
         plt.scatter(wphotwl, wphot * (Vflux/wVflux)*(1/(veiling+1)), color = 'b', zorder= 2 )
-        plt.plot(ctts.spectra[datatag]['wl'], ctts.spectra[datatag]['lFl'], color = 'r')
+        plt.plot(ctts.spectra[v_list[0]]['wl'], ctts.spectra[v_list[0]]['lFl'], color = 'r')
         plt.plot(wtts_scaled.spectra[wttstag]['wl'], wtts_scaled.spectra[wttstag]['lFl'] * ((dctts * pc)/(Rctts * Rsun))**-2 * (wtts.spectra[wttstag]['wl']*1e4), color = 'b')
         plt.scatter(photwl, phot, color = 'r')
         plt.ylim([10**np.floor(np.log10(np.min(np.hstack([phot, wphot])))),  10**np.ceil(np.log10(np.max(np.hstack([phot, wphot]))))])
@@ -430,7 +442,7 @@ def modelplot(F,jobnums, f, ctts, wtts, datatag,\
             legendhandles.append(mpatches.Patch(color=colors[i], label=r'$F = $'+F[i]+r', $f = $'+str(np.round(f[i],decimals = 4))))
             
         plt.plot(wl[0][np.argsort(wl[0])], pd.rolling_mean(Fall[np.argsort(wl[0])],smooth), color = 'k', label = 'Total Flux')
-        plt.plot(wl[0][np.argsort(wl[0])], pd.rolling_mean(Fphot[0][np.argsort(wl[0])] * (1-f[i]), smooth), color = 'k', alpha = .5, label = 'Photosphere')
+        plt.plot(wl[0][np.argsort(wl[0])], pd.rolling_mean(Fphot[0][np.argsort(wl[0])] * (1-np.sum(f)), smooth), color = 'k', alpha = .5, label = 'Photosphere')
     
     if plottarg == '':
         plottarg = datatag
@@ -701,11 +713,11 @@ def modelsum(targ, f, F,jobnums,\
     if modelpath == '/Users/Connor/Desktop/Research/shock/models/':
         modelpath = modelpath+targ+'/'
     
-    if len(F) == 1:
-        modelname = [targ+'_'+str(jobnums).zfill(nzeros)+'.fits']
-        
-    else:
-        modelname = [targ+'_'+str(job).zfill(nzeros)+'.fits' for job in jobnums]
+#    if len(np.atleast1d(F)) == 1:
+#        modelname = [targ+'_'+str(jobnums).zfill(nzeros)+'.fits']
+#        
+#    else:
+    modelname = [targ+'_'+str(job).zfill(nzeros)+'.fits' for job in np.atleast_1d(jobnums)]
     
     wl    = []
     Fhp   = []
@@ -751,10 +763,9 @@ def modelsum(targ, f, F,jobnums,\
             
         return wl, Fall, Fhp, Fpre, Fphot
     else:
-        
         return wl, Fhp, Fpre, Fphot
 
-def MCMCsolve(table, ctts, jobs, burnin = 1000, Nruns = 5000, modelpath = '', nzeros = 3, Nthreads = 1):
+def MCMCsolve(table, ctts, jobs, datatag, burnin = 1000, Nruns = 5000, modelpath = '', nzeros = 3, Nthreads = 1):
     '''
     shock.MCMCsolve()
     
@@ -774,12 +785,12 @@ def MCMCsolve(table, ctts, jobs, burnin = 1000, Nruns = 5000, modelpath = '', nz
     
     NOTE: All the models MUST have the same veiling + generated from the same dataset for any of this to make sense
     
-    AUTHOR:
+    AUTHOR:a
         Connor Robinson, May 19th, 2017
     
     '''
     targ = ctts.name
-    datatag = np.array(table['datatag'][table['jobnum'] == jobs[0]])[0][1:-1]
+    #datatag = np.array(table['datatag'][table['jobnum'] == jobs[0]])[0][1:-1]
     
     #Get all the values for F for the set of jobs given
     F = [np.array(table['BIGF'][table['jobnum'] == x])[0][1:-1] for x in jobs]
@@ -841,7 +852,14 @@ def cumulativeProb(chi2, veils, xlim = [], save = False, name = None):
     if xlim == []:
         xlim = [0,veils[-1]]
     
-    prob = np.exp(-np.array(chi2)/2)/np.sum(np.exp(-np.array(chi2)/2))
+    
+#    prob = np.exp(-chi2/2/np.sum(chi2))
+    
+    chi2 = np.array(chi2)
+    
+    prob =  np.exp(-chi2/2 + np.min(chi2/2))/np.sum( np.exp(-chi2/2 + np.min(chi2/2)))
+    
+#    prob = np.exp(-np.array(chi2)/2)/np.sum(np.exp(-np.array(chi2)/2))
     
     cProb = np.cumsum(prob)
     
@@ -865,7 +883,7 @@ def cumulativeProb(chi2, veils, xlim = [], save = False, name = None):
     #Outline color
     c5 = '#134461'
     
-    plt.figure(figsize = [13,7])
+    plt.figure(figsize = [10,7])
     
     #Plot the location of the maximum chi2 value
     probMax = np.argmax(prob)
